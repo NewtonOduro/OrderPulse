@@ -1,6 +1,8 @@
 import express from "express";
-import cors from "cors";
+import { rateLimit } from "express-rate-limit";
 import { randomBytes } from "node:crypto";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import bcrypt from "bcryptjs";
 import { db } from "./database.js";
 import { sendOrderNotifications, sendReservationNotifications } from "./order-notifications.js";
@@ -19,8 +21,39 @@ import {
 
 export const app = express();
 
-app.use(cors({ origin: process.env.CLIENT_ORIGIN || "http://localhost:5173" }));
-app.post("/api/careers/applications", express.json({ limit: "7mb" }), (request, response) => {
+const frontendDist = resolve(dirname(fileURLToPath(import.meta.url)), "../../frontend/dist");
+const authenticationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many sign-in attempts. Please try again in 15 minutes." },
+});
+const orderLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many order requests. Please try again in 15 minutes." },
+});
+const reservationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 15,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many reservation requests. Please try again in 15 minutes." },
+});
+const applicationLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many application submissions. Please try again later." },
+});
+
+if (process.env.NODE_ENV === "production") app.set("trust proxy", 1);
+
+app.post("/api/careers/applications", applicationLimiter, express.json({ limit: "7mb" }), (request, response) => {
   const {
     firstName,
     lastName,
@@ -182,7 +215,7 @@ const validReservationHours = (time) => {
 };
 const bookingStartsInFuture = (date, time) => Date.parse(`${date}T${time}:00Z`) >= Date.now();
 
-app.post("/api/auth/register", async (request, response) => {
+app.post("/api/auth/register", authenticationLimiter, async (request, response) => {
   const { name, email, phone, password } = request.body ?? {};
   if (
     !validText(name, 2, 80) ||
@@ -211,7 +244,7 @@ app.post("/api/auth/register", async (request, response) => {
   }
 });
 
-app.post("/api/auth/login", async (request, response) => {
+app.post("/api/auth/login", authenticationLimiter, async (request, response) => {
   const { email, password } = request.body ?? {};
   if (typeof email !== "string" || email.length > 254 || typeof password !== "string" || password.length > 128) {
     return response.status(400).json({ error: "Enter your email address and password." });
@@ -286,7 +319,7 @@ app.get("/api/menu", (_request, response) =>
   ),
 );
 
-app.post("/api/order-tracking", (request, response) => {
+app.post("/api/order-tracking", orderLimiter, (request, response) => {
   const { orderNumber, phone } = request.body ?? {};
   if (
     typeof orderNumber !== "string" ||
@@ -302,7 +335,7 @@ app.post("/api/order-tracking", (request, response) => {
   return response.json(readTrackedOrder(order));
 });
 
-app.post("/api/orders", (request, response) => {
+app.post("/api/orders", orderLimiter, (request, response) => {
   const { customerName, customerEmail, phone, orderType, items } = request.body ?? {};
   if (
     !validText(customerName, 2, 80) ||
@@ -419,7 +452,7 @@ app.get("/api/reservation-availability", (request, response) => {
   return response.json({ date, time, partySize, durationMinutes: reservationDurationMinutes, tables });
 });
 
-app.post("/api/bookings", requireUser, requireCustomer, async (request, response) => {
+app.post("/api/bookings", reservationLimiter, requireUser, requireCustomer, async (request, response) => {
   const { date, time, partySize, notes = "" } = request.body ?? {};
   if (
     !validBookingDate(date) ||
@@ -862,6 +895,15 @@ app.patch("/api/staff/orders/:id", (request, response) => {
   const result = db.prepare("UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(status, orderId);
   if (result.changes === 0) return response.status(404).json({ error: "Order not found." });
   return response.json(readOrders().find((order) => order.id === orderId));
+});
+
+app.use("/api", (_request, response) => response.status(404).json({ error: "API route not found." }));
+app.use(express.static(frontendDist));
+app.use((request, response, next) => {
+  if (request.method !== "GET" || request.path.startsWith("/api/")) return next();
+  return response.sendFile(resolve(frontendDist, "index.html"), (error) => {
+    if (error) next(error);
+  });
 });
 
 app.use((error, _request, response, _next) => {

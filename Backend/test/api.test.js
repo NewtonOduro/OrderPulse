@@ -1,6 +1,6 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import bcrypt from "bcryptjs";
@@ -56,6 +56,23 @@ test("menu API returns items priced in Ghana cedis", async () => {
   assert.ok(!items.some((item) => item.name === "Fufuo with light soup"));
   assert.ok(items.some((item) => item.name === "Red red & fried plantain" && item.imageUrl === "/images/red-red.jpg"));
   assert.ok(!items.some((item) => /paella|soda can safe|nigerian jollof/i.test(item.name)));
+});
+
+test("serves the production frontend and client routes when the frontend is built", {
+  skip: !existsSync(new URL("../../frontend/dist/index.html", import.meta.url)),
+}, async () => {
+  const home = await fetch(baseUrl);
+  const homeHtml = await home.text();
+  assert.equal(home.status, 200);
+  assert.match(home.headers.get("content-type"), /text\/html/);
+  assert.match(homeHtml, /OrderPulse/);
+
+  const menu = await fetch(`${baseUrl}/menu`);
+  assert.equal(menu.status, 200);
+  assert.equal(await menu.text(), homeHtml);
+
+  const unknownApi = await fetch(`${baseUrl}/api/unknown`);
+  assert.doesNotMatch(unknownApi.headers.get("content-type") || "", /text\/html/);
 });
 
 test("orders are validated and persisted with a cedi total", async () => {

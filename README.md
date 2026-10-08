@@ -53,6 +53,17 @@ Order checkout collects an email and phone number, attempts a receipt email over
 
 The API also runs on its own with `npm start --prefix Backend`; the production React bundle can be created with `npm run build`.
 
+## Deploy to Render
+
+`render.yaml` defines one Node web service that builds the React frontend, serves it and the Express API from the same HTTPS origin, and stores SQLite under a persistent disk. The service and disk are paid Render resources; do not switch the service to a plan that does not support persistent disks, or the restaurant data will not be durable.
+
+1. Push this repository to GitHub and import `NewtonOduro/OrderPulse` in the Render dashboard using **New + → Blueprint**. Review the `orderpulse` service and its persistent disk before creating it.
+2. When prompted for the unsynced environment values, enter the manager's name and email, and set a unique randomly generated password of at least 12 characters. Enter secrets only in Render's dashboard, never in GitHub or chat.
+3. After the first deploy is healthy, open the service's Shell and run `npm run create-manager --prefix Backend` once. Then remove `ADMIN_PASSWORD` from the service's environment and save/redeploy. Keep the manager email and password in a password manager.
+4. Check `/api/health`, then test a customer registration, a menu order, reservation availability, and manager sign-in on the public HTTPS URL. The database starts fresh on Render; local orders, accounts, reservations, and menu edits are not copied automatically.
+5. Set up and test SMTP and Hubtel credentials in Render if order and reservation email/SMS notifications are required. The application does not take online payments; checkout currently records pickup or dine-in orders for payment at the restaurant.
+6. Before accepting real customer data, arrange regular off-instance backups of the SQLite database and test restoring one. A persistent disk protects data across service deploys, but is not a backup. Configure an owned custom domain in Render if desired; Render provides HTTPS for the service and verified custom domains.
+
 ## API overview
 
 - `GET /api/menu`, `POST /api/orders`, and customer account endpoints support guest browsing, ordering, and sign-in.
@@ -61,6 +72,7 @@ The API also runs on its own with `npm start --prefix Backend`; the production R
 - `POST /api/bookings` requires an authenticated customer account; staff assign a table when confirming a request.
 - `PATCH /api/staff/menu/:id/stock` updates tracked stock quantity and its low-stock alert threshold.
 - Menu categories are validated by the API; drinks must specify a beverage group, and known drink subcategories must be paired with a compatible group.
+- Sign-in/registration, order and tracking requests, reservations, and job-application submissions are rate-limited per client IP.
 - `/api/staff/*` endpoints require an active staff or manager session. `/api/manager/*` requires a manager session.
 - `GET /api/health` reports API readiness.
 
