@@ -105,15 +105,23 @@ function money(amount) {
   return ghanaCurrency.format(amount).replace("GHS", "GH₵");
 }
 
+function handleMenuImageError(event) {
+  event.currentTarget.onerror = null;
+  event.currentTarget.src = "/images/red-red.jpg";
+}
+
 function App() {
   const [isMenuPage, setIsMenuPage] = useState(() => window.location.pathname === "/menu");
   const [isApplicationPage, setIsApplicationPage] = useState(() => window.location.pathname === "/apply");
   const [isAboutPage, setIsAboutPage] = useState(() => window.location.pathname === "/about");
   const [menuItems, setMenuItems] = useState([]);
   const [menuError, setMenuError] = useState("");
+  const [menuLoading, setMenuLoading] = useState(true);
   const [category, setCategory] = useState("All");
+  const [homeMenuCategory, setHomeMenuCategory] = useState("All");
   const [cart, setCart] = useState([]);
   const [cartOpen, setCartOpen] = useState(false);
+  const [cartNotice, setCartNotice] = useState("");
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [bookingMessage, setBookingMessage] = useState("");
   const [bookingNotifications, setBookingNotifications] = useState(null);
@@ -158,13 +166,20 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (!cartNotice) return undefined;
+    const timeout = window.setTimeout(() => setCartNotice(""), 2800);
+    return () => window.clearTimeout(timeout);
+  }, [cartNotice]);
+
+  useEffect(() => {
     fetch("/api/menu")
       .then(async (response) => {
         if (!response.ok) throw new Error("We couldn't load the menu. Please refresh to try again.");
         return response.json();
       })
       .then(setMenuItems)
-      .catch((error) => setMenuError(error.message));
+      .catch((error) => setMenuError(error.message))
+      .finally(() => setMenuLoading(false));
     fetch("/api/auth/me", { credentials: "same-origin" })
       .then(async (response) => {
         if (response.status === 401) return null;
@@ -301,6 +316,24 @@ function App() {
     },
     [menuItems],
   );
+  const homeMenuCategories = useMemo(
+    () => ["All", ...menuCategories.filter((menuCategory) =>
+      menuItems.some((item) => item.available !== false && item.category === menuCategory),
+    )],
+    [menuItems],
+  );
+  const homeMenuItems = useMemo(() => {
+    const availableItems = menuItems.filter((item) => item.available !== false);
+    const categoryItems = homeMenuCategory === "All"
+      ? availableItems
+      : availableItems.filter((item) => item.category === homeMenuCategory);
+    const featuredIds = new Set(featuredItems.map((item) => item.id));
+    const additionalItems = categoryItems.filter((item) => !featuredIds.has(item.id));
+    return (additionalItems.length ? additionalItems : categoryItems)
+      .slice()
+      .sort((first, second) => Number(Boolean(second.badge)) - Number(Boolean(first.badge)))
+      .slice(0, 4);
+  }, [featuredItems, homeMenuCategory, menuItems]);
   const visibleCount = menuSections.reduce(
     (count, section) => count + section.groups.reduce((groupCount, group) => groupCount + group.items.length, 0),
     0,
@@ -339,13 +372,13 @@ function App() {
       <div className="menu-filter-list mb-8 flex gap-2 overflow-x-auto pb-2" aria-label="Filter menu by category">
         {categories.map((item) => <button key={item} type="button" aria-pressed={category === item} onClick={() => setCategory(item)} className={`menu-filter-button whitespace-nowrap rounded-full font-semibold ${category === item ? "is-active" : ""}`}>{item === "Foreign food" ? "Foreign foods" : item}</button>)}
       </div>
-      {menuError ? <p role="alert" className="rounded-2xl bg-red-50 p-5 text-sm text-red-700">{menuError}</p> : menuItems.length === 0 ? <p className="rounded-2xl bg-white p-8 text-center text-sm text-forest/50">Loading today's menu…</p> : visibleCount === 0 ? <p className="rounded-2xl bg-white p-8 text-center text-sm text-forest/50">No items are listed in this category yet. Ask the manager to add or move an item here.</p> : (
+      {menuError ? <p role="alert" className="rounded-2xl bg-red-50 p-5 text-sm text-red-700">{menuError}</p> : menuLoading ? <div className="menu-loading-grid" aria-label="Loading menu" aria-busy="true">{Array.from({ length: 6 }, (_, index) => <div className="menu-skeleton-card" key={index}><span /><div><i /><i /><i /></div></div>)}</div> : visibleCount === 0 ? <p className="menu-empty-state"><span aria-hidden="true">✳</span><strong>No dishes in this category yet</strong><span>Try another category, or check back soon for something fresh.</span></p> : (
         <div className="space-y-12">
           {menuSections.filter((section) => section.groups.length > 0).map((section) => <section key={section.category} aria-label={section.title}>
             <div className="mb-6 flex items-center gap-3 border-b border-forest/10 pb-3"><span className="h-2 w-2 rounded-full bg-leaf" /><h2 className="font-display text-2xl font-semibold sm:text-3xl">{section.title}</h2><span className="text-xs text-forest/45">{section.groups.reduce((count, group) => count + group.items.length, 0)} dishes</span></div>
             <div className="space-y-8">{section.groups.map((group) => <div key={`${section.category}-${group.title}`}><div className="mb-4 flex items-center gap-2"><h3 className="text-sm font-semibold text-forest/75">{group.title}</h3><span className="text-[10px] text-forest/40">{group.items.length} items</span></div><div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
               {group.items.map((item) => <article key={item.id} className="group min-w-0 overflow-hidden rounded-[1.4rem] bg-white transition hover:-translate-y-1 hover:shadow-xl hover:shadow-forest/5">
-                <div className="relative h-48 overflow-hidden sm:h-52"><img src={item.imageUrl} alt={item.name} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" loading="lazy" />{item.badge && <span className="absolute left-4 top-4 rounded-full bg-white/90 px-3 py-1.5 text-[10px] font-bold text-leaf backdrop-blur">{item.badge}</span>}<button type="button" onClick={() => updateQuantity(item, 1)} className="menu-add-button absolute bottom-3 right-3 grid place-items-center rounded-full bg-lime text-forest shadow" aria-label={`Add ${item.name} to bag`}><Plus size={17} /></button></div>
+                <div className="relative h-48 overflow-hidden sm:h-52"><img src={item.imageUrl} alt={item.name} onError={handleMenuImageError} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" loading="lazy" />{item.badge && <span className="absolute left-4 top-4 rounded-full bg-white/90 px-3 py-1.5 text-[10px] font-bold text-leaf backdrop-blur">{item.badge}</span>}<button type="button" onClick={() => updateQuantity(item, 1)} className="menu-add-button absolute bottom-3 right-3 grid place-items-center rounded-full bg-lime text-forest shadow" aria-label={`Add ${item.name} to bag`}><Plus size={17} /></button></div>
                 <div className="p-4 sm:p-5"><div className="flex items-start justify-between gap-3"><h4 className="font-display text-lg font-semibold leading-snug sm:text-xl">{item.name}</h4><span className="shrink-0 whitespace-nowrap text-sm font-bold">{money(item.price)}</span></div><p className="mt-2.5 min-h-[42px] text-xs leading-5 text-forest/55">{item.description}</p></div>
               </article>)}
             </div></div>)}</div>
@@ -515,6 +548,7 @@ function App() {
   }, [featuredItems.length]);
 
   function updateQuantity(menuItem, amount) {
+    if (amount > 0) setCartNotice(`${menuItem.name} added to your bag`);
     setCart((current) => {
       const existing = current.find((item) => item.id === menuItem.id);
       if (!existing && amount > 0) return [...current, { ...menuItem, quantity: 1 }];
@@ -798,7 +832,7 @@ function App() {
               <a href="/menu" onClick={(event) => navigate(event, "/menu")} className="landing-button">Explore the menu <ArrowRight size={16} /></a>
               <a href="#reserve" onClick={(event) => navigate(event, "#reserve")} className="landing-text-link">Book a table <ArrowUpRight size={15} /></a>
             </div>
-            <div className="landing-trust"><span><i /> Freshly prepared</span><span><i /> Local favourites</span></div>
+            <div className="landing-trust"><span><i /> Freshly prepared</span><span><i /> Local favourites</span><span><i /> Open daily · 11 am–10 pm</span></div>
           </div>
           <div className="landing-hero-visual">
             <img src="/images/red-red.jpg" alt="Ghanaian red red with ripe fried plantain served on a banana leaf" />
@@ -819,7 +853,7 @@ function App() {
               {featuredItems.map((item, index) => <article key={item.id} className="featured-menu-panel">
                 <div className="featured-menu-plate" aria-hidden="true">
                   <div className="featured-plate-wood">
-                    <img src={item.imageUrl} alt="" loading="lazy" />
+                    <img src={item.imageUrl} alt="" onError={handleMenuImageError} loading="lazy" />
                   </div>
                 </div>
                 <div className="featured-menu-copy">
@@ -844,6 +878,44 @@ function App() {
         <section className="landing-feature-cards" aria-label="Restaurant highlights">
           <a href="/menu" onClick={(event) => navigate(event, "/menu")} className="landing-feature-photo"><img src="/images/red-red.jpg" alt="" /><span>Fresh from our kitchen</span><strong>Good food, made with heart.</strong></a>
           <a href="/menu" onClick={(event) => navigate(event, "/menu")} className="landing-feature-banner"><span>OUR TABLE, YOUR WAY</span><strong>Ghanaian favourites.<br />A seat for everyone.</strong><span className="landing-feature-cta">See what's cooking <ArrowRight size={15} /></span><span className="landing-sunburst" aria-hidden="true">✳</span></a>
+        </section>
+
+        <section className="home-menu-section" aria-labelledby="home-menu-heading">
+          <div className="home-menu-heading">
+            <div>
+              <span className="home-menu-eyebrow">FRESH FROM OUR KITCHEN</span>
+              <h2 id="home-menu-heading">A few favourites<span>.</span></h2>
+              <p>Find something delicious, made with care and ready to order.</p>
+            </div>
+            <a href="/menu" onClick={(event) => navigate(event, "/menu")} className="home-menu-all-link">View full menu <ArrowRight size={16} /></a>
+          </div>
+          <div className="home-menu-filters" role="group" aria-label="Filter featured dishes">
+            {homeMenuCategories.map((item) => <button
+              key={item}
+              type="button"
+              aria-pressed={homeMenuCategory === item}
+              className={`home-menu-filter${homeMenuCategory === item ? " is-active" : ""}`}
+              onClick={() => setHomeMenuCategory(item)}
+            >{item === "All" ? "All dishes" : item === "Foreign food" ? "Foreign favourites" : item}</button>)}
+          </div>
+          {menuLoading ? <div className="home-menu-grid" aria-label="Loading featured dishes" aria-busy="true">{Array.from({ length: 4 }, (_, index) => <div className="home-menu-skeleton" key={index} />)}</div>
+            : menuError ? <p role="alert" className="home-menu-message">{menuError}</p>
+              : homeMenuItems.length === 0 ? <p className="home-menu-message">No dishes are available in this category right now. Please check the full menu for more.</p>
+                : <div className="home-menu-grid">{homeMenuItems.map((item) => <article className="home-menu-card" key={item.id}>
+                  <div className="home-menu-photo">
+                    <img src={item.imageUrl} alt={item.name} onError={handleMenuImageError} loading="lazy" />
+                    <span>{item.badge || (item.category === "Local food" ? "Ghanaian favourite" : "Made fresh")}</span>
+                  </div>
+                  <div className="home-menu-card-copy">
+                    <span className="home-menu-category">{item.category === "Foreign food" ? "Foreign favourites" : item.category}{item.subcategory ? ` · ${item.subcategory}` : ""}</span>
+                    <h3>{item.name}</h3>
+                    <p>{item.description}</p>
+                    <div className="home-menu-card-bottom">
+                      <strong>{money(item.price)}</strong>
+                      <button type="button" onClick={() => updateQuantity(item, 1)} aria-label={`Add ${item.name} to bag`}>Add to bag <Plus size={15} /></button>
+                    </div>
+                  </div>
+                </article>)}</div>}
         </section>
 
         <section id="careers" className="careers-section">
@@ -1030,7 +1102,7 @@ function App() {
         <aside className="ml-auto flex h-full w-full max-w-md flex-col bg-cream p-5 shadow-2xl sm:p-7">
           <div className="flex items-center justify-between border-b border-forest/10 pb-5"><div><p className="text-[10px] font-bold uppercase tracking-[.2em] text-leaf">Made fresh for you</p><h2 className="mt-1 font-display text-2xl font-semibold">Your bag <span className="text-forest/35">({cartCount})</span></h2></div><button onClick={() => setCartOpen(false)} className="rounded-full p-2 hover:bg-forest/5" aria-label="Close bag"><X size={20} /></button></div>
           {cart.length === 0 ? <div className="grid flex-1 place-items-center text-center"><div><span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-lime/40 text-leaf"><ShoppingBag size={23} /></span><p className="mt-4 font-display text-xl font-semibold">It's a little empty in here</p><p className="mt-2 text-sm text-forest/50">Add something delicious from our menu.</p><a href="/menu" onClick={(event) => { setCartOpen(false); navigate(event, "/menu"); }} className="mt-5 inline-block text-sm font-semibold text-leaf underline underline-offset-4">Explore the menu</a></div></div> : <>
-            <div className="flex-1 space-y-4 overflow-y-auto py-5">{cart.map((item) => <div key={item.id} className="flex gap-3 rounded-2xl bg-white p-3"><img src={item.imageUrl} alt="" className="h-20 w-20 rounded-xl object-cover" /><div className="min-w-0 flex-1"><h3 className="truncate font-display font-semibold">{item.name}</h3><p className="mt-1 text-xs font-semibold">{money(item.price)}</p><div className="mt-2 flex items-center gap-3"><button onClick={() => updateQuantity(item, -1)} aria-label={`Remove one ${item.name}`} className="grid h-7 w-7 place-items-center rounded-full bg-cream"><Minus size={13} /></button><span className="text-xs font-semibold">{item.quantity}</span><button onClick={() => updateQuantity(item, 1)} aria-label={`Add one ${item.name}`} className="grid h-7 w-7 place-items-center rounded-full bg-lime/50"><Plus size={13} /></button></div></div><span className="self-start text-xs font-bold">{money(item.price * item.quantity)}</span></div>)}</div>
+            <div className="flex-1 space-y-4 overflow-y-auto py-5">{cart.map((item) => <div key={item.id} className="flex gap-3 rounded-2xl bg-white p-3"><img src={item.imageUrl} alt="" onError={handleMenuImageError} className="h-20 w-20 rounded-xl object-cover" /><div className="min-w-0 flex-1"><h3 className="truncate font-display font-semibold">{item.name}</h3><p className="mt-1 text-xs font-semibold">{money(item.price)}</p><div className="mt-2 flex items-center gap-3"><button onClick={() => updateQuantity(item, -1)} aria-label={`Remove one ${item.name}`} className="grid h-7 w-7 place-items-center rounded-full bg-cream"><Minus size={13} /></button><span className="text-xs font-semibold">{item.quantity}</span><button onClick={() => updateQuantity(item, 1)} aria-label={`Add one ${item.name}`} className="grid h-7 w-7 place-items-center rounded-full bg-lime/50"><Plus size={13} /></button></div></div><span className="self-start text-xs font-bold">{money(item.price * item.quantity)}</span></div>)}</div>
             <div className="border-t border-forest/10 pt-5"><div className="flex justify-between text-sm"><span className="text-forest/55">Subtotal</span><span className="font-bold">{money(subtotal)}</span></div><p className="mt-2 text-[11px] text-forest/45">Taxes and any extras confirmed at the restaurant.</p><button onClick={() => { setCartOpen(false); setCheckoutOpen(true); }} className="mt-5 w-full rounded-full bg-forest py-3.5 text-sm font-semibold text-white transition hover:bg-leaf">Continue to checkout <ArrowRight size={15} className="ml-1 inline" /></button></div>
           </>}
         </aside>
@@ -1061,7 +1133,7 @@ function App() {
           <div className="checkout-body">
             <section className="checkout-section">
               <h3>Order summary <span>{cartCount} {cartCount === 1 ? "item" : "items"}</span></h3>
-              <div className="checkout-items">{cart.map((item) => <div key={item.id} className="checkout-item"><img src={item.imageUrl} alt="" /><div><strong>{item.name}</strong><span>Qty: {item.quantity} · {money(item.price)} each</span></div><b>{money(item.price * item.quantity)}</b></div>)}</div>
+              <div className="checkout-items">{cart.map((item) => <div key={item.id} className="checkout-item"><img src={item.imageUrl} alt="" onError={handleMenuImageError} /><div><strong>{item.name}</strong><span>Qty: {item.quantity} · {money(item.price)} each</span></div><b>{money(item.price * item.quantity)}</b></div>)}</div>
               <div className="checkout-total-row"><span>Subtotal</span><strong>{money(subtotal)}</strong></div>
               <div className="checkout-total-row checkout-total"><span>Total</span><strong>{money(subtotal)}</strong></div>
               <p className="checkout-note">Any extras or applicable taxes will be confirmed at the restaurant.</p>
@@ -1085,6 +1157,8 @@ function App() {
       </div>}
 
       {authOpen && <AuthDialog mode={authMode} onClose={() => setAuthOpen(false)} onSuccess={acceptCustomerSignIn} onModeChange={setAuthMode} />}
+
+      {cartNotice && <div className="cart-toast" role="status" aria-live="polite"><span aria-hidden="true"><ShoppingBag size={17} /></span><div><strong>Added to your bag</strong><small>{cartNotice.replace(" added to your bag", "")}</small></div><button type="button" onClick={() => { setCartNotice(""); setCartOpen(true); }}>View bag <ArrowRight size={14} /></button></div>}
 
       <button onClick={() => setCartOpen(true)} className="fixed bottom-5 right-5 z-30 inline-flex items-center gap-2 rounded-full bg-forest px-4 py-3 text-sm font-semibold text-white shadow-xl md:hidden"><ShoppingBag size={17} /> Bag {cartCount > 0 && `· ${cartCount}`} <span className="text-lime">{money(subtotal)}</span></button>
     </div>
