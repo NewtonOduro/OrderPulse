@@ -283,6 +283,16 @@ a {
   line-height: 1.5;
 }
 
+.auth-success {
+  margin: 0;
+  border-radius: 10px;
+  background: #e9eee4;
+  padding: 10px 12px;
+  color: #416b4f;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .auth-switch {
   margin: 15px 0 0;
   color: rgb(20 37 29 / 62%);
@@ -372,6 +382,21 @@ a {
   color: rgb(20 37 29 / 45%);
   font-size: 11px;
   line-height: 1.6;
+}
+
+.staff-hint button {
+  color: #416b4f;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.staff-hint button + button {
+  margin-left: 12px;
+}
+
+.staff-hint p {
+  margin-top: 8px;
 }
 
 .staff-hint code {

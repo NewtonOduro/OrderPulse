@@ -1,5 +1,6 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import bcrypt from "bcryptjs";
 
@@ -15,6 +16,7 @@ for (const key of [
 ]) {
   process.env[key] = "";
 }
+const { createEmailAuthToken } = await import("../src/email-auth.js");
 const { app } = await import("../src/app.js");
 const { db } = await import("../src/database.js");
 let server;
@@ -152,8 +154,42 @@ test("customers must create an account or sign in before reserving", async () =>
   });
   const registration = await registered.json();
   assert.equal(registered.status, 201);
-  assert.equal(registration.user.role, "customer");
-  const customerCookie = sessionCookie(registered);
+  assert.match(registration.message, /verify your address/i);
+  assert.equal(registration.verificationEmail.status, "not_configured");
+  assert.equal(sessionCookie(registered), undefined);
+  const registeredUser = await db.get("SELECT id, email_verified FROM users WHERE email = ?", ["kojo@example.com"]);
+  assert.equal(registeredUser.email_verified, false);
+  const unverifiedLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "kojo@example.com", password: "guest-account-password-123" }),
+  });
+  assert.equal(unverifiedLogin.status, 403);
+  assert.equal((await unverifiedLogin.json()).code, "EMAIL_NOT_VERIFIED");
+
+  const verificationToken = await createEmailAuthToken(registeredUser.id, "verify_email");
+  const storedVerificationToken = await db.get("SELECT token_hash FROM email_auth_tokens WHERE purpose = 'verify_email' ORDER BY id DESC LIMIT 1");
+  assert.equal(storedVerificationToken.token_hash, createHash("sha256").update(verificationToken).digest("hex"));
+  const verification = await fetch(`${baseUrl}/api/auth/verify-email`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: verificationToken }),
+  });
+  assert.equal(verification.status, 200);
+  assert.equal((await verification.json()).email, "kojo@example.com");
+  const reusedVerification = await fetch(`${baseUrl}/api/auth/verify-email`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: verificationToken }),
+  });
+  assert.equal(reusedVerification.status, 400);
+  const verifiedLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "kojo@example.com", password: "guest-account-password-123" }),
+  });
+  const customerCookie = sessionCookie(verifiedLogin);
+  assert.equal(verifiedLogin.status, 200);
 
   const invalidWithAccount = await fetch(`${baseUrl}/api/bookings`, {
     method: "POST",
@@ -211,6 +247,50 @@ test("customers must create an account or sign in before reserving", async () =>
   const unchanged = await cancelReservation();
   assert.equal(unchanged.status, 200);
   assert.equal((await unchanged.json()).notifications, undefined);
+
+  const resetRequest = await fetch(`${baseUrl}/api/auth/forgot-password`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "kojo@example.com" }),
+  });
+  assert.equal(resetRequest.status, 202);
+  const unknownResetRequest = await fetch(`${baseUrl}/api/auth/forgot-password`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "unknown@example.com" }),
+  });
+  assert.equal(unknownResetRequest.status, 202);
+  assert.equal((await unknownResetRequest.json()).message, (await resetRequest.json()).message);
+  const expiredToken = await createEmailAuthToken(registeredUser.id, "reset_password");
+  const expiredTokenHash = createHash("sha256").update(expiredToken).digest("hex");
+  await db.run("UPDATE email_auth_tokens SET expires_at = ? WHERE token_hash = ?", ["2000-01-01T00:00:00.000Z", expiredTokenHash]);
+  const expiredReset = await fetch(`${baseUrl}/api/auth/reset-password`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: expiredToken, password: "new-guest-account-password-456" }),
+  });
+  assert.equal(expiredReset.status, 400);
+  const resetToken = await createEmailAuthToken(registeredUser.id, "reset_password");
+  const reset = await fetch(`${baseUrl}/api/auth/reset-password`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: resetToken, password: "new-guest-account-password-456" }),
+  });
+  assert.equal(reset.status, 200);
+  assert.equal((await reset.json()).email, "kojo@example.com");
+  assert.equal((await fetch(`${baseUrl}/api/auth/me`, { headers: { cookie: customerCookie } })).status, 401);
+  const resetLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "kojo@example.com", password: "new-guest-account-password-456" }),
+  });
+  assert.equal(resetLogin.status, 200);
+  const reusedReset = await fetch(`${baseUrl}/api/auth/reset-password`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: resetToken, password: "another-password-123456" }),
+  });
+  assert.equal(reusedReset.status, 400);
 });
 
 test("reservation availability checks seating capacity and blocks overlapping 90-minute bookings", async () => {
@@ -239,7 +319,20 @@ test("reservation availability checks seating capacity and blocks overlapping 90
     }),
   });
   assert.equal(guest.status, 201);
-  const guestCookie = sessionCookie(guest);
+  const availabilityUser = await db.get("SELECT id FROM users WHERE email = ?", ["availability@example.com"]);
+  const availabilityToken = await createEmailAuthToken(availabilityUser.id, "verify_email");
+  const availabilityVerification = await fetch(`${baseUrl}/api/auth/verify-email`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: availabilityToken }),
+  });
+  assert.equal(availabilityVerification.status, 200);
+  const availabilityLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "availability@example.com", password: "availability-password-123" }),
+  });
+  const guestCookie = sessionCookie(availabilityLogin);
   const makeBooking = (time) =>
     fetch(`${baseUrl}/api/bookings`, {
       method: "POST",
@@ -305,12 +398,28 @@ test("individual staff accounts manage service while manager can see named activ
     body: JSON.stringify({ name: "Kitchen Lead", email: "lead@example.com", password: "staff-account-password-123" }),
   });
   assert.equal(createdStaff.status, 201);
-  assert.equal((await createdStaff.json()).role, "staff");
+  const newStaff = await createdStaff.json();
+  assert.equal(newStaff.role, "staff");
+  assert.equal(newStaff.verificationEmail.status, "not_configured");
+  const pendingStaffLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "lead@example.com", password: "staff-account-password-123" }),
+  });
+  assert.equal(pendingStaffLogin.status, 403);
+  const staffToken = await createEmailAuthToken(newStaff.id, "verify_email");
+  const staffVerification = await fetch(`${baseUrl}/api/auth/verify-email`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: staffToken }),
+  });
+  assert.equal(staffVerification.status, 200);
   const staffLogin = await fetch(`${baseUrl}/api/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "lead@example.com", password: "staff-account-password-123" }),
   });
+  assert.equal(staffLogin.status, 200);
   const staffCookie = sessionCookie(staffLogin);
   const headers = { "content-type": "application/json", cookie: staffCookie };
   const staffMenuCreate = await fetch(`${baseUrl}/api/staff/menu`, {

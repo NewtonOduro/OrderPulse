@@ -118,7 +118,17 @@ const schema = `
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('customer', 'staff', 'manager')),
     active BOOLEAN NOT NULL DEFAULT TRUE,
+    email_verified BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS email_auth_tokens (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose TEXT NOT NULL CHECK (purpose IN ('verify_email', 'reset_password')),
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used_at TIMESTAMPTZ
   );
 
   CREATE TABLE IF NOT EXISTS restaurant_tables (
@@ -232,4 +242,5 @@ async function seedDatabase(db) {
 const pool = await createPool();
 export const db = createDatabaseAdapter(pool);
 await pool.query(schema);
+await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT TRUE");
 if (process.env.PG_SKIP_SEED !== "1") await seedDatabase(db);

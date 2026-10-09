@@ -131,8 +131,14 @@ function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [staffMode, setStaffMode] = useState(false);
   const [customerUser, setCustomerUser] = useState(null);
-  const [authOpen, setAuthOpen] = useState(false);
-  const [authMode, setAuthMode] = useState("login");
+  const [authOpen, setAuthOpen] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.has("verifyEmail") || params.has("resetPassword");
+  });
+  const [authMode, setAuthMode] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.has("verifyEmail") ? "verify" : params.has("resetPassword") ? "reset" : "login";
+  });
   const [customerReservations, setCustomerReservations] = useState([]);
   const [bookingSlot, setBookingSlot] = useState({ date: "", time: "", partySize: 2 });
   const [tableAvailability, setTableAvailability] = useState(null);
@@ -580,6 +586,18 @@ function App() {
     } catch (error) {
       setBookingMessage(error.message);
     }
+  }
+
+  function clearAuthTokenFromUrl() {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("verifyEmail");
+    url.searchParams.delete("resetPassword");
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  function closeAuthDialog() {
+    clearAuthTokenFromUrl();
+    setAuthOpen(false);
   }
 
   async function submitBooking(event) {
@@ -1152,12 +1170,19 @@ function App() {
             </section>
             <button disabled={busy || cart.length === 0} className="checkout-submit">{busy ? "Placing your order…" : `Place order · ${money(subtotal)}`}</button>
             {orderMessage && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{orderMessage}</p>}
-            <p className="checkout-footnote">We'll send your order confirmation to both contact details.</p>
+            <p className="checkout-footnote">We'll email your order confirmation. Use your phone number with the order number to track progress.</p>
           </div>
         </form>}
       </div>}
 
-      {authOpen && <AuthDialog mode={authMode} onClose={() => setAuthOpen(false)} onSuccess={acceptCustomerSignIn} onModeChange={setAuthMode} />}
+      {authOpen && <AuthDialog
+        mode={authMode}
+        token={new URLSearchParams(window.location.search).get(authMode === "verify" ? "verifyEmail" : "resetPassword") || ""}
+        onClose={closeAuthDialog}
+        onSuccess={acceptCustomerSignIn}
+        onModeChange={setAuthMode}
+        onClearAuthToken={clearAuthTokenFromUrl}
+      />}
 
       {cartNotice && <div className="cart-toast" role="status" aria-live="polite"><span aria-hidden="true"><ShoppingBag size={17} /></span><div><strong>Added to your bag</strong><small>{cartNotice.replace(" added to your bag", "")}</small></div><button type="button" onClick={() => { setCartNotice(""); setCartOpen(true); }}>View bag <ArrowRight size={14} /></button></div>}
 

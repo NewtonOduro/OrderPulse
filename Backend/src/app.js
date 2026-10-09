@@ -5,10 +5,13 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import bcrypt from "bcryptjs";
 import { db } from "./database.js";
+import { consumeEmailAuthToken, createEmailAuthToken } from "./email-auth.js";
 import {
   sendCareerApplicationNotifications,
   sendOrderNotifications,
   sendReservationNotifications,
+  sendPasswordResetEmail,
+  sendVerificationEmail,
 } from "./order-notifications.js";
 import { getAvailableTables, reservationDurationMinutes } from "./reservation-availability.js";
 import { beverageGroups, isValidMenuPlacement, menuCategories } from "./menu-categories.js";
@@ -24,14 +27,25 @@ import {
 } from "./auth.js";
 
 export const app = express();
+app.use((_request, response, next) => {
+  response.setHeader("Referrer-Policy", "no-referrer");
+  return next();
+});
 
 const frontendDist = resolve(dirname(fileURLToPath(import.meta.url)), "../../frontend/dist");
 const authenticationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 10,
+  limit: process.env.PG_MEM_TEST === "1" ? 100 : 10,
   standardHeaders: "draft-8",
   legacyHeaders: false,
   message: { error: "Too many sign-in attempts. Please try again in 15 minutes." },
+});
+const emailAuthenticationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: process.env.PG_MEM_TEST === "1" ? 100 : 5,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many email authentication requests. Please try again in 15 minutes." },
 });
 const orderLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -254,12 +268,16 @@ app.post("/api/auth/register", authenticationLimiter, async (request, response) 
   try {
     const passwordHash = await bcrypt.hash(password, 12);
     const result = await db.run(`
-      INSERT INTO users (name, email, phone, password_hash, role)
-      VALUES (?, ?, ?, ?, 'customer')
+      INSERT INTO users (name, email, phone, password_hash, role, email_verified)
+      VALUES (?, ?, ?, ?, 'customer', FALSE)
     `, [name.trim(), email.trim().toLowerCase(), phone.trim(), passwordHash]);
     const user = await db.get("SELECT id, name, email, phone, role FROM users WHERE id = ?", [result.lastInsertRowid]);
-    await setSession(response, user.id);
-    return response.status(201).json({ user });
+    const token = await createEmailAuthToken(user.id, "verify_email");
+    const verificationEmail = await sendVerificationEmail({ email: user.email, name: user.name, token });
+    return response.status(201).json({
+      message: "Account created. Check your email for a link to verify your address before signing in.",
+      verificationEmail,
+    });
   } catch (error) {
     if (error.code === "23505") return response.status(409).json({ error: "An account with this email already exists. Sign in instead." });
     throw error;
@@ -275,8 +293,71 @@ app.post("/api/auth/login", authenticationLimiter, async (request, response) => 
   if (!user || !user.active || !(await bcrypt.compare(password, user.password_hash))) {
     return response.status(401).json({ error: "The email or password is incorrect." });
   }
+  if (!user.email_verified) {
+    return response.status(403).json({
+      error: "Verify your email before signing in. Check your inbox or request a fresh verification email.",
+      code: "EMAIL_NOT_VERIFIED",
+    });
+  }
   await setSession(response, user.id);
   return response.json({ user: safeUser(user) });
+});
+
+app.post("/api/auth/verify-email", emailAuthenticationLimiter, async (request, response) => {
+  const { token } = request.body ?? {};
+  const user = await consumeEmailAuthToken(token, "verify_email", async (transaction, verifiedUser) => {
+    await transaction.run("UPDATE users SET email_verified = TRUE WHERE id = ?", [verifiedUser.id]);
+  });
+  if (!user) return response.status(400).json({ error: "This verification link is invalid, expired, or already used. Request a new link and try again." });
+  return response.json({ message: "Email verified. You can now sign in.", email: user.email });
+});
+
+app.post("/api/auth/resend-verification", emailAuthenticationLimiter, async (request, response) => {
+  const email = request.body?.email;
+  if (typeof email === "string" && email.length <= 254 && emailPattern.test(email.trim())) {
+    const user = await db.get(`
+      SELECT id, name, email FROM users
+      WHERE LOWER(email) = LOWER(?) AND active = TRUE AND email_verified = FALSE
+    `, [email.trim().toLowerCase()]);
+    if (user) {
+      const token = await createEmailAuthToken(user.id, "verify_email");
+      await sendVerificationEmail({ email: user.email, name: user.name, token });
+    }
+  }
+  return response.status(202).json({
+    message: "If that account needs email verification, a fresh link will be sent to its address.",
+  });
+});
+
+app.post("/api/auth/forgot-password", emailAuthenticationLimiter, async (request, response) => {
+  const email = request.body?.email;
+  if (typeof email === "string" && email.length <= 254 && emailPattern.test(email.trim())) {
+    const user = await db.get(`
+      SELECT id, name, email FROM users
+      WHERE LOWER(email) = LOWER(?) AND active = TRUE
+    `, [email.trim().toLowerCase()]);
+    if (user) {
+      const token = await createEmailAuthToken(user.id, "reset_password");
+      await sendPasswordResetEmail({ email: user.email, name: user.name, token });
+    }
+  }
+  return response.status(202).json({
+    message: "If an active account uses that email, a password reset link will be sent.",
+  });
+});
+
+app.post("/api/auth/reset-password", emailAuthenticationLimiter, async (request, response) => {
+  const { token, password } = request.body ?? {};
+  if (typeof password !== "string" || password.length < minimumPasswordLength || password.length > 128) {
+    return response.status(400).json({ error: "Choose a password with at least 12 characters." });
+  }
+  const passwordHash = await bcrypt.hash(password, 12);
+  const user = await consumeEmailAuthToken(token, "reset_password", async (transaction, resetUser) => {
+    await transaction.run("UPDATE users SET password_hash = ? WHERE id = ?", [passwordHash, resetUser.id]);
+    await transaction.run("DELETE FROM sessions WHERE user_id = ?", [resetUser.id]);
+  });
+  if (!user) return response.status(400).json({ error: "This password reset link is invalid, expired, or already used. Request a new link and try again." });
+  return response.json({ message: "Password reset. Sign in with your new password.", email: user.email });
 });
 
 app.get("/api/auth/me", requireUser, (request, response) => response.json({ user: request.user }));
@@ -623,13 +704,15 @@ app.post("/api/manager/staff", async (request, response) => {
   try {
     const passwordHash = await bcrypt.hash(password, 12);
     const result = await db.run(`
-      INSERT INTO users (name, email, password_hash, role)
-      VALUES (?, ?, ?, 'staff')
+      INSERT INTO users (name, email, password_hash, role, email_verified)
+      VALUES (?, ?, ?, 'staff', FALSE)
     `, [name.trim(), email.trim().toLowerCase(), passwordHash]);
     const staff = await db.get(`
       SELECT id, name, email, role, active, created_at AS "createdAt" FROM users WHERE id = ?
     `, [result.lastInsertRowid]);
-    return response.status(201).json({ ...staff, active: Boolean(staff.active) });
+    const token = await createEmailAuthToken(staff.id, "verify_email");
+    const verificationEmail = await sendVerificationEmail({ email: staff.email, name: staff.name, token });
+    return response.status(201).json({ ...staff, active: Boolean(staff.active), verificationEmail });
   } catch (error) {
     if (error.code === "23505") return response.status(409).json({ error: "An account with this email already exists." });
     throw error;

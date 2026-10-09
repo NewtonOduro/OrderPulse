@@ -55,7 +55,11 @@ async function request(path, _unused, options = {}) {
         : `The server returned an unreadable error (HTTP ${response.status}). Please try again.`,
     );
   }
-  if (!response.ok) throw new Error(result.error || "The staff request could not be completed.");
+  if (!response.ok) {
+    const error = new Error(result.error || "The staff request could not be completed.");
+    error.code = result.code || "";
+    throw error;
+  }
   return result;
 }
 
@@ -67,6 +71,9 @@ function StaffDashboard({ onExit }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [loginMode, setLoginMode] = useState("login");
+  const [loginErrorCode, setLoginErrorCode] = useState("");
+  const [loginNotice, setLoginNotice] = useState("");
   const [user, setUser] = useState(null);
   const [authorized, setAuthorized] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
@@ -119,6 +126,8 @@ function StaffDashboard({ onExit }) {
     event.preventDefault();
     setBusy(true);
     setError("");
+    setLoginErrorCode("");
+    setLoginNotice("");
     try {
       const result = await request("/api/auth/login", null, {
         method: "POST",
@@ -133,9 +142,35 @@ function StaffDashboard({ onExit }) {
       setAuthorized(true);
     } catch (loginError) {
       setError(loginError.message);
+      setLoginErrorCode(loginError.code || "");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function sendAccountEmail(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    setLoginNotice("");
+    try {
+      const result = await request(`/api/auth/${loginMode === "forgot" ? "forgot-password" : "resend-verification"}`, null, {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      });
+      setLoginNotice(result.message);
+    } catch (emailError) {
+      setError(emailError.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function changeLoginMode(mode) {
+    setLoginMode(mode);
+    setError("");
+    setLoginErrorCode("");
+    setLoginNotice("");
   }
 
   async function runAction(action, successMessage) {
@@ -170,16 +205,22 @@ function StaffDashboard({ onExit }) {
     return (
       <main className="staff-login">
         <button className="staff-back" onClick={onExit}><ArrowLeft size={16} /> Back to restaurant</button>
-        <form className="staff-login-card" onSubmit={signIn}>
+        <form className="staff-login-card" onSubmit={loginMode === "login" ? signIn : sendAccountEmail}>
           <span className="staff-icon"><ChefHat size={23} /></span>
           <p className="staff-eyebrow">THE GREEN PLATE · TEAM</p>
-          <h1>Staff sign in</h1>
-          <p className="staff-subtitle">Sign in with your individual staff account to open restaurant operations.</p>
+          <h1>{loginMode === "forgot" ? "Reset your password" : loginMode === "resend" ? "Verify your email" : "Staff sign in"}</h1>
+          <p className="staff-subtitle">{loginMode === "login" ? "Sign in with your individual staff account to open restaurant operations." : loginMode === "forgot" ? "Enter your work email and we'll send a reset link if it matches an active account." : "Enter your work email to request a fresh verification link."}</p>
           <label className="field-label">Work email<input required type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@restaurant.com" /></label>
-          <label className="field-label staff-login-password">Password<span className="password-input-wrap"><input required type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" /><button className="password-visibility-toggle" type="button" aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword} onClick={() => setShowPassword((visible) => !visible)}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>
+          {loginMode === "login" && <label className="field-label staff-login-password">Password<span className="password-input-wrap"><input required type={showPassword ? "text" : "password"} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Enter your password" /><button className="password-visibility-toggle" type="button" aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword} onClick={() => setShowPassword((visible) => !visible)}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>}
           {error && <p role="alert" className="staff-alert">{error}</p>}
-          <button disabled={busy} className="staff-primary">{busy ? "Checking…" : "Open dashboard"}</button>
-          <p className="staff-hint">Your manager creates individual staff accounts. Contact your manager if you need access.</p>
+          {loginNotice && <p role="status" className="staff-notice">{loginNotice}</p>}
+          <button disabled={busy} className="staff-primary">{busy ? "Checking…" : loginMode === "login" ? "Open dashboard" : loginMode === "forgot" ? "Send reset link" : "Send verification link"}</button>
+          {loginMode === "login" && <div className="staff-hint">
+            <button type="button" onClick={() => changeLoginMode("forgot")}>Forgot password?</button>
+            {loginErrorCode === "EMAIL_NOT_VERIFIED" && <button type="button" onClick={() => changeLoginMode("resend")}>Resend verification email</button>}
+            <p>Your manager creates individual staff accounts. Contact your manager if you need access.</p>
+          </div>}
+          {loginMode !== "login" && <p className="staff-hint"><button type="button" onClick={() => changeLoginMode("login")}>Back to staff sign in</button></p>}
         </form>
       </main>
     );
@@ -290,7 +331,7 @@ function TeamManagement({ users, busy, onAction }) {
     onAction(async () => {
       await request("/api/manager/staff", null, { method: "POST", body: JSON.stringify(payload) });
       formElement.reset();
-    }, "Staff account created.");
+    }, "Staff account created. The team member must verify their work email before signing in.");
   }
   return <section className="staff-content">
     <div className="staff-section-intro"><div><h2>Staff accounts</h2><p>Create individual logins and turn off access when it is no longer needed.</p></div><span className="staff-count">{users.filter((user) => user.role === "staff" && user.active).length} active staff</span></div>
@@ -298,7 +339,7 @@ function TeamManagement({ users, busy, onAction }) {
       <label className="field-label">Staff name<input required name="name" minLength="2" maxLength="80" autoComplete="name" /></label>
       <label className="field-label">Work email<input required name="email" type="email" maxLength="254" autoComplete="email" /></label>
       <label className="field-label">Temporary password<span className="password-input-wrap"><input required name="password" type={showPassword ? "text" : "password"} minLength="12" maxLength="128" autoComplete="new-password" /><button className="password-visibility-toggle" type="button" aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword} onClick={() => setShowPassword((visible) => !visible)}>{showPassword ? <EyeOff size={17} /> : <Eye size={17} />}</button></span></label>
-      <p>Share the temporary password privately. Deactivate the account from this page when the team member no longer needs access.</p>
+      <p>Share the temporary password privately. The team member must verify their work email before signing in. Deactivate the account here when access is no longer needed.</p>
       <button disabled={busy} className="staff-primary"><Plus size={15} /> Create staff account</button>
     </form>
     <div className="staff-panel staff-team-list"><div className="staff-panel-head"><div><h2>Team roster</h2><p>Managers and staff with access to restaurant operations</p></div></div>

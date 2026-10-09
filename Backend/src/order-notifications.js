@@ -69,6 +69,59 @@ async function sendStaffEmail({ subject, text, html, reference }) {
   return sendEmail({ to, subject, text, html, reference });
 }
 
+function authenticationLink(parameter, token) {
+  const configuredUrl = process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || "http://localhost:5173";
+  try {
+    const url = new URL(configuredUrl);
+    if (!["http:", "https:"].includes(url.protocol)) return null;
+    url.pathname = "/";
+    url.search = "";
+    url.hash = "";
+    url.searchParams.set(parameter, token);
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+export async function sendVerificationEmail({ email, name, token }) {
+  const link = authenticationLink("verifyEmail", token);
+  if (!link) return { status: "failed", message: "PUBLIC_APP_URL must be a valid HTTP or HTTPS URL." };
+  return sendEmail({
+    to: email,
+    subject: "Verify your OrderPulse email",
+    text: [
+      `Hello ${name},`,
+      "",
+      "Verify your email address to activate your OrderPulse account:",
+      link,
+      "",
+      "This link expires in 24 hours. If you did not create this account, you can ignore this email.",
+    ].join("\n"),
+    html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(name)},</p><p>Verify your email address to activate your account.</p><p><a href="${escapeHtml(link)}" style="display:inline-block;background:#193d2d;color:white;padding:12px 20px;border-radius:24px;text-decoration:none">Verify email</a></p><p>This link expires in 24 hours. If you did not create this account, you can ignore this email.</p></div>`,
+    reference: "email verification",
+  });
+}
+
+export async function sendPasswordResetEmail({ email, name, token }) {
+  const link = authenticationLink("resetPassword", token);
+  if (!link) return { status: "failed", message: "PUBLIC_APP_URL must be a valid HTTP or HTTPS URL." };
+  return sendEmail({
+    to: email,
+    subject: "Reset your OrderPulse password",
+    text: [
+      `Hello ${name},`,
+      "",
+      "Use this link to choose a new OrderPulse password:",
+      link,
+      "",
+      "This link expires in one hour. If you did not request a password reset, you can ignore this email.",
+    ].join("\n"),
+    html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(name)},</p><p>Use the link below to choose a new password.</p><p><a href="${escapeHtml(link)}" style="display:inline-block;background:#193d2d;color:white;padding:12px 20px;border-radius:24px;text-decoration:none">Reset password</a></p><p>This link expires in one hour. If you did not request a password reset, you can ignore this email.</p></div>`,
+    reference: "password reset",
+  });
+}
+
 export async function sendOrderNotifications(order) {
   const lines = [
     `Hello ${order.customerName},`,
