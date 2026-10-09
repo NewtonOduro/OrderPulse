@@ -59,12 +59,11 @@ The API also runs on its own with `npm start --prefix Backend`; the production R
 `render.yaml` defines a free Node web service that builds the React frontend and serves it and the Express API from the same HTTPS origin. Restaurant data is stored in PostgreSQL, not on the Render service filesystem; configure a PostgreSQL provider such as Neon so service restarts and redeploys do not erase it. Render's free web service may sleep when idle, so it is suitable for a low-cost launch/test but may not meet always-on production needs.
 
 1. Create a PostgreSQL database with your provider and copy its private connection string. Do not share it in chat or commit it to the repository.
-2. Push this repository to GitHub and import `NewtonOduro/OrderPulse` in the Render dashboard using **New + → Blueprint**. Choose the free service plan and provide the PostgreSQL connection string as `DATABASE_URL` in Render's private environment settings.
-3. When prompted for the other unsynced environment values, enter the manager's name and email, and set a unique randomly generated password of at least 12 characters. Enter secrets only in Render's dashboard, never in GitHub or chat.
-4. After the first deploy is healthy, open the service's Shell and run `npm run create-manager --prefix Backend` once. Then remove `ADMIN_PASSWORD` from the service's environment and save/redeploy. Keep the manager email and password in a password manager.
-5. Check `/api/health`, then test a customer registration, a menu order, reservation availability, and manager sign-in on the public HTTPS URL. If you do not run the one-time importer first, Neon starts with the default seeded menu and tables; existing local accounts, orders, reservations, applications, and activity history are not imported.
-6. Set up and test SMTP and Hubtel credentials in Render if order and reservation email/SMS notifications are required. The application does not take online payments; checkout currently records pickup or dine-in orders for payment at the restaurant.
-7. Arrange regular database backups with the PostgreSQL provider and test restoring one. Configure an owned custom domain in Render if desired; Render provides HTTPS for the service and verified custom domains.
+2. Push this repository to GitHub, then import `NewtonOduro/OrderPulse` in the Render dashboard using **New + → Blueprint**. Choose the free service plan, connect the `main` branch, and provide the PostgreSQL connection string as `DATABASE_URL` in Render's private environment settings.
+3. The local Neon setup has already created the manager account. Do not run the manager bootstrap command a second time; sign in with the account you configured locally.
+4. Check `/api/health`, then test a customer registration, a menu order, reservation availability, and manager sign-in on the public HTTPS URL. If you do not run the one-time importer first, Neon starts with the default seeded menu and tables; existing local accounts, orders, reservations, applications, and activity history are not imported.
+5. Set up and test SMTP and Hubtel credentials in Render if order and reservation email/SMS notifications are required. The application does not take online payments; checkout currently records pickup or dine-in orders for payment at the restaurant.
+6. Arrange regular database backups with the PostgreSQL provider and test restoring one. Configure an owned custom domain in Render if desired; Render provides HTTPS for the service and verified custom domains.
 
 ## API overview
 
