@@ -508,7 +508,7 @@ app.post("/api/bookings", reservationLimiter, requireUser, requireCustomer, asyn
     status: "requested",
     tableName: null,
   };
-  const notifications = await sendReservationNotifications(reservation);
+  const notifications = await sendReservationNotifications(reservation, { notifyStaff: true });
   return response.status(201).json({
     bookingId: reservation.id,
     status: "requested",

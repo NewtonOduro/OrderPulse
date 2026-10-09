@@ -61,6 +61,14 @@ async function sendEmail({ to, subject, text, html, reference, replyTo, attachme
   }
 }
 
+async function sendStaffEmail({ subject, text, html, reference }) {
+  const to = process.env.STAFF_NOTIFICATION_EMAIL;
+  if (!to) {
+    return { status: "no_recipient", message: "Staff notification email is not configured." };
+  }
+  return sendEmail({ to, subject, text, html, reference });
+}
+
 export async function sendOrderNotifications(order) {
   const lines = [
     `Hello ${order.customerName},`,
@@ -77,17 +85,35 @@ export async function sendOrderNotifications(order) {
   const htmlItems = order.items.map((item) =>
     `<li>${item.quantity} × ${escapeHtml(item.name)} — ${formatMoney(item.unitPrice * item.quantity)}</li>`,
   ).join("");
-  const email = await sendEmail({
-    to: order.customerEmail,
-    subject: `OrderPulse order ${order.orderNumber}`,
-    text: lines.join("\n"),
-    html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(order.customerName)},</p><p>We received order <strong>${escapeHtml(order.orderNumber)}</strong> (${order.orderType === "dine-in" ? "Dine in" : "Pickup"}).</p><ul>${htmlItems}</ul><p><strong>Total: ${formatMoney(order.total)}</strong></p><p>Status: ${escapeHtml(order.status)}</p><p>Thank you for choosing OrderPulse.</p></div>`,
-    reference: `order ${order.orderNumber}`,
-  });
-  return { email };
+  const [email, staffEmail] = await Promise.all([
+    sendEmail({
+      to: order.customerEmail,
+      subject: `OrderPulse order ${order.orderNumber}`,
+      text: lines.join("\n"),
+      html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(order.customerName)},</p><p>We received order <strong>${escapeHtml(order.orderNumber)}</strong> (${order.orderType === "dine-in" ? "Dine in" : "Pickup"}).</p><ul>${htmlItems}</ul><p><strong>Total: ${formatMoney(order.total)}</strong></p><p>Status: ${escapeHtml(order.status)}</p><p>Thank you for choosing OrderPulse.</p></div>`,
+      reference: `order ${order.orderNumber}`,
+    }),
+    sendStaffEmail({
+      subject: `New OrderPulse order ${order.orderNumber}`,
+      text: [
+        `New ${order.orderType === "dine-in" ? "dine-in" : "pickup"} order ${order.orderNumber}`,
+        "",
+        `Customer: ${order.customerName}`,
+        `Email: ${order.customerEmail}`,
+        `Phone: ${order.phone}`,
+        "",
+        ...order.items.map((item) => `${item.quantity} × ${item.name} — ${formatMoney(item.unitPrice * item.quantity)}`),
+        "",
+        `Total: ${formatMoney(order.total)}`,
+      ].join("\n"),
+      html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>New restaurant order</h1><p><strong>Order:</strong> ${escapeHtml(order.orderNumber)} (${order.orderType === "dine-in" ? "Dine in" : "Pickup"})</p><p><strong>Customer:</strong> ${escapeHtml(order.customerName)}<br><strong>Email:</strong> ${escapeHtml(order.customerEmail)}<br><strong>Phone:</strong> ${escapeHtml(order.phone)}</p><ul>${htmlItems}</ul><p><strong>Total: ${formatMoney(order.total)}</strong></p></div>`,
+      reference: `staff notification for order ${order.orderNumber}`,
+    }),
+  ]);
+  return { email, staffEmail };
 }
 
-export async function sendReservationNotifications(reservation) {
+export async function sendReservationNotifications(reservation, { notifyStaff = false } = {}) {
   const statusMessage = reservation.status === "requested"
     ? "We received your table request. Our team will confirm it shortly."
     : `Your reservation is ${reservation.status}${reservation.tableName ? ` at ${reservation.tableName}` : ""}.`;
@@ -104,14 +130,34 @@ export async function sendReservationNotifications(reservation) {
   ].filter((line) => line !== null).join("\n");
   const html = `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(reservation.customerName)},</p><p>${escapeHtml(statusMessage)}</p><p><strong>Date:</strong> ${escapeHtml(reservation.date)} at ${escapeHtml(reservation.time)}<br><strong>Guests:</strong> ${reservation.partySize}${reservation.tableName ? `<br><strong>Table:</strong> ${escapeHtml(reservation.tableName)}` : ""}</p>${reservation.notes ? `<p><strong>Your note:</strong> ${escapeHtml(reservation.notes)}</p>` : ""}<p>OrderPulse · Accra</p></div>`;
   const reference = `reservation ${reservation.id}`;
-  const email = await sendEmail({
-    to: reservation.customerEmail,
-    subject: `OrderPulse reservation ${reservation.status}`,
-    text,
-    html,
-    reference,
-  });
-  return { email };
+  const notifications = [
+    sendEmail({
+      to: reservation.customerEmail,
+      subject: `OrderPulse reservation ${reservation.status}`,
+      text,
+      html,
+      reference,
+    }),
+  ];
+  if (notifyStaff) {
+    notifications.push(sendStaffEmail({
+      subject: `New OrderPulse table request for ${reservation.date} at ${reservation.time}`,
+      text: [
+        `New table request ${reservation.id}`,
+        "",
+        `Customer: ${reservation.customerName}`,
+        `Email: ${reservation.customerEmail}`,
+        `Phone: ${reservation.phone}`,
+        `Date: ${reservation.date} at ${reservation.time}`,
+        `Guests: ${reservation.partySize}`,
+        reservation.notes ? `Notes: ${reservation.notes}` : null,
+      ].filter((line) => line !== null).join("\n"),
+      html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>New table request</h1><p><strong>Customer:</strong> ${escapeHtml(reservation.customerName)}<br><strong>Email:</strong> ${escapeHtml(reservation.customerEmail)}<br><strong>Phone:</strong> ${escapeHtml(reservation.phone)}</p><p><strong>Date:</strong> ${escapeHtml(reservation.date)} at ${escapeHtml(reservation.time)}<br><strong>Guests:</strong> ${reservation.partySize}</p>${reservation.notes ? `<p><strong>Notes:</strong> ${escapeHtml(reservation.notes)}</p>` : ""}</div>`,
+      reference: `staff notification for reservation ${reservation.id}`,
+    }));
+  }
+  const [email, staffEmail] = await Promise.all(notifications);
+  return { email, ...(notifyStaff ? { staffEmail } : {}) };
 }
 
 export async function sendCareerApplicationNotifications(application) {
