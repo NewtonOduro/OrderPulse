@@ -18,7 +18,7 @@ function configurationStatus(values, required, label) {
   return null;
 }
 
-async function sendEmail({ to, subject, text, html, reference }) {
+async function sendEmail({ to, subject, text, html, reference, replyTo, attachments }) {
   const config = {
     SMTP_HOST: process.env.SMTP_HOST,
     SMTP_PORT: process.env.SMTP_PORT,
@@ -52,6 +52,8 @@ async function sendEmail({ to, subject, text, html, reference }) {
       subject,
       text,
       html,
+      ...(replyTo ? { replyTo } : {}),
+      ...(attachments ? { attachments } : {}),
     });
     return { status: "sent", message: "Email sent." };
   } catch (error) {
@@ -170,4 +172,63 @@ export async function sendReservationNotifications(reservation) {
     }),
   ]);
   return { email, sms };
+}
+
+export async function sendCareerApplicationNotifications(application) {
+  const reference = `job application ${application.applicationNumber}`;
+  const applicantName = `${application.firstName} ${application.lastName}`;
+  const applicantEmail = sendEmail({
+    to: application.email,
+    subject: `OrderPulse received your ${application.desiredPosition} application`,
+    text: [
+      `Hello ${application.firstName},`,
+      "",
+      `We received your application for the ${application.desiredPosition} position.`,
+      `Your application reference is ${application.applicationNumber}.`,
+      "Our team will review your application and contact you if we need more information.",
+      "",
+      "OrderPulse · Accra",
+    ].join("\n"),
+    html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(application.firstName)},</p><p>We received your application for the <strong>${escapeHtml(application.desiredPosition)}</strong> position.</p><p>Your application reference is <strong>${escapeHtml(application.applicationNumber)}</strong>.</p><p>Our team will review your application and contact you if we need more information.</p><p>OrderPulse · Accra</p></div>`,
+    reference,
+  });
+
+  const employerEmailAddress = process.env.JOB_APPLICATION_NOTIFICATION_EMAIL;
+  const employerEmail = employerEmailAddress
+    ? sendEmail({
+      to: employerEmailAddress,
+      replyTo: application.email,
+      subject: `New OrderPulse application: ${application.desiredPosition} — ${applicantName}`,
+      text: [
+        `New application ${application.applicationNumber}`,
+        "",
+        `Applicant: ${applicantName}`,
+        `Position: ${application.desiredPosition}`,
+        `Email: ${application.email}`,
+        `Phone: ${application.phone}`,
+        "",
+        "Applicant message:",
+        application.message || "(No message provided.)",
+        "",
+        "The applicant's CV is attached.",
+      ].join("\n"),
+      html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>New job application</h1><p><strong>Reference:</strong> ${escapeHtml(application.applicationNumber)}</p><p><strong>Applicant:</strong> ${escapeHtml(applicantName)}<br><strong>Position:</strong> ${escapeHtml(application.desiredPosition)}<br><strong>Email:</strong> ${escapeHtml(application.email)}<br><strong>Phone:</strong> ${escapeHtml(application.phone)}</p><h2>Applicant message</h2><p>${escapeHtml(application.message || "(No message provided.)").replace(/\n/g, "<br>")}</p><p>The applicant's CV is attached.</p></div>`,
+      attachments: [{
+        filename: application.resumeName,
+        content: application.resumeData,
+        contentType: application.resumeType,
+        contentDisposition: "attachment",
+      }],
+      reference,
+    })
+    : Promise.resolve({
+      status: "no_recipient",
+      message: "Employer notification email is not configured.",
+    });
+
+  const [applicantEmailResult, employerEmailResult] = await Promise.all([applicantEmail, employerEmail]);
+  return {
+    applicantEmail: applicantEmailResult,
+    employerEmail: employerEmailResult,
+  };
 }

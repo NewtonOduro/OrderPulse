@@ -2773,11 +2773,87 @@ a {
   }
 
   .landing-header {
-    padding: 13px 16px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 10px;
+    padding: 10px 14px;
   }
 
-  .landing-header > a > span:last-child {
-    font-size: 17px;
+  .landing-header > .landing-brand {
+    grid-column: 1;
+    grid-row: 1;
+    justify-self: start;
+    min-width: 0;
+  }
+
+  .landing-brand > span:last-child {
+    font-size: clamp(15px, 4.5vw, 18px);
+    white-space: nowrap;
+  }
+
+  .landing-brand-tag {
+    font-size: 7px !important;
+    letter-spacing: .16em !important;
+  }
+
+  .landing-header > div {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    gap: 5px;
+  }
+
+  .landing-header .landing-account-actions {
+    gap: 0;
+  }
+
+  .landing-header .landing-action {
+    display: inline-flex;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    min-height: 38px;
+    flex: 0 0 38px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgb(255 247 237 / 38%);
+    border-radius: 50%;
+    padding: 0;
+    color: #fff7ed;
+  }
+
+  .landing-header .landing-action > span {
+    display: none;
+  }
+
+  .landing-header .landing-action[aria-label^="Open bag"] {
+    position: relative;
+    border-color: rgb(255 247 237 / 55%);
+  }
+
+  .landing-header .landing-action[aria-label^="Open bag"] > .landing-cart-count {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    display: grid;
+    width: 17px;
+    min-width: 17px;
+    height: 17px;
+    place-items: center;
+    border: 1px solid #df292f;
+    border-radius: 50%;
+    background: #f5d37f;
+    color: #14251d;
+    font-size: 9px;
+  }
+
+  .landing-header .landing-menu-toggle {
+    display: inline-flex;
+  }
+
+  .landing-header .landing-action:focus-visible {
+    outline: 2px solid #f5d37f;
+    outline-offset: 2px;
   }
 
   .landing-mark {
@@ -2956,8 +3032,22 @@ a {
 }
 
 @media (min-width: 768px) and (max-width: 1120px) {
+  .landing-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: clamp(12px, 2vw, 24px);
+  }
+
+  .landing-header > .landing-brand {
+    grid-column: 1;
+    justify-self: start;
+  }
+
   .landing-header > .landing-nav {
     display: none;
+  }
+
+  .landing-header > div {
+    grid-column: 3;
   }
 
   .landing-header button[aria-label="Toggle menu"] {

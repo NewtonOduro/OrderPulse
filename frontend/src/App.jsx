@@ -725,7 +725,9 @@ function App() {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "We couldn't submit your application. Please try again.");
-      setApplicationMessage(`Thank you for applying. Your application reference is ${result.applicationNumber}.`);
+      setApplicationMessage(
+        `Application ${result.applicationNumber} received. Applicant email: ${result.notifications.applicantEmail.message} Employer email: ${result.notifications.employerEmail.message}`,
+      );
       formElement.reset();
     } catch (error) {
       setApplicationError(error.message);
@@ -804,17 +806,17 @@ function App() {
           <a className="transition hover:text-leaf" href={sectionHref("reserve")} onClick={(event) => navigate(event, sectionHref("reserve"))}>Find a table</a>
         </nav>
         <div className="flex items-center gap-2">
-          <button aria-label="Staff workspace" className="inline-flex min-h-10 items-center gap-2 rounded-full px-2 py-2.5 text-sm font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-4" onClick={() => setStaffMode(true)}><ChefHat size={16} /><span className="hidden sm:inline">Staff</span></button>
-          {customerUser ? <div className="flex items-center gap-1"><span className="hidden max-w-28 truncate text-xs font-semibold text-leaf sm:inline">{customerUser.name.split(" ")[0]}</span><button aria-label="Sign out of your guest account" className="inline-flex min-h-10 items-center gap-2 rounded-full border border-forest/10 px-2.5 text-xs font-semibold text-forest/65 hover:border-leaf hover:text-leaf sm:px-3" onClick={signOutCustomer}><CircleUserRound size={16} /><span className="hidden md:inline">Sign out</span></button></div> : <button className="inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 py-2.5 text-xs font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-3" onClick={() => { setAuthMode("login"); setAuthOpen(true); }}><CircleUserRound size={16} /><span className="hidden sm:inline">Sign in</span></button>}
+          <button aria-label="Staff workspace" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2 py-2.5 text-sm font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-4" onClick={() => setStaffMode(true)}><ChefHat size={16} /><span className="hidden sm:inline">Staff</span></button>
+          {customerUser ? <div className="landing-account-actions flex items-center gap-1"><span className="hidden max-w-28 truncate text-xs font-semibold text-leaf sm:inline">{customerUser.name.split(" ")[0]}</span><button aria-label="Sign out of your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full border border-forest/10 px-2.5 text-xs font-semibold text-forest/65 hover:border-leaf hover:text-leaf sm:px-3" onClick={signOutCustomer}><CircleUserRound size={16} /><span className="hidden md:inline">Sign out</span></button></div> : <button aria-label="Sign in to your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 py-2.5 text-xs font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-3" onClick={() => { setAuthMode("login"); setAuthOpen(true); }}><CircleUserRound size={16} /><span className="hidden sm:inline">Sign in</span></button>}
           <button
-            className="relative inline-flex items-center gap-2 rounded-full border border-forest/10 px-4 py-2.5 text-sm font-semibold transition hover:border-leaf hover:text-leaf"
+            className="landing-action relative inline-flex items-center gap-2 rounded-full border border-forest/10 px-4 py-2.5 text-sm font-semibold transition hover:border-leaf hover:text-leaf"
             onClick={() => setCartOpen(true)}
             aria-label={`Open bag with ${cartCount} items`}
           >
             <ShoppingBag size={17} /><span className="hidden sm:inline">Your bag</span>
-            {cartCount > 0 && <span className="grid h-5 min-w-5 place-items-center rounded-full bg-lime px-1 text-[10px]">{cartCount}</span>}
+            {cartCount > 0 && <span className="landing-cart-count grid h-5 min-w-5 place-items-center rounded-full bg-lime px-1 text-[10px]">{cartCount}</span>}
           </button>
-          <button className="rounded-full p-2 md:hidden" onClick={() => setMobileMenuOpen((open) => !open)} aria-label="Toggle menu">
+          <button className="landing-action landing-menu-toggle rounded-full p-2 md:hidden" onClick={() => setMobileMenuOpen((open) => !open)} aria-label="Toggle menu" aria-expanded={mobileMenuOpen}>
             {mobileMenuOpen ? <X size={20} /> : <MenuIcon size={20} />}
           </button>
         </div>

@@ -4,6 +4,19 @@ import { existsSync } from "node:fs";
 import bcrypt from "bcryptjs";
 
 process.env.PG_MEM_TEST = "1";
+for (const key of [
+  "SMTP_HOST",
+  "SMTP_PORT",
+  "SMTP_USER",
+  "SMTP_PASS",
+  "SMTP_FROM",
+  "JOB_APPLICATION_NOTIFICATION_EMAIL",
+  "HUBTEL_CLIENT_ID",
+  "HUBTEL_CLIENT_SECRET",
+  "HUBTEL_SENDER_ID",
+]) {
+  process.env[key] = "";
+}
 const { app } = await import("../src/app.js");
 const { db } = await import("../src/database.js");
 let server;
@@ -558,6 +571,8 @@ test("career applications persist CVs and can only be retrieved by managers", as
   const submittedApplication = await submitted.json();
   assert.equal(submitted.status, 201);
   assert.match(submittedApplication.applicationNumber, /^OP-\d+$/);
+  assert.equal(submittedApplication.notifications.applicantEmail.status, "not_configured");
+  assert.equal(submittedApplication.notifications.employerEmail.status, "no_recipient");
 
   const unauthenticated = await fetch(`${baseUrl}/api/manager/applications`);
   assert.equal(unauthenticated.status, 401);

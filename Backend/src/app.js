@@ -5,7 +5,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import bcrypt from "bcryptjs";
 import { db } from "./database.js";
-import { sendOrderNotifications, sendReservationNotifications } from "./order-notifications.js";
+import {
+  sendCareerApplicationNotifications,
+  sendOrderNotifications,
+  sendReservationNotifications,
+} from "./order-notifications.js";
 import { getAvailableTables, reservationDurationMinutes } from "./reservation-availability.js";
 import { beverageGroups, isValidMenuPlacement, menuCategories } from "./menu-categories.js";
 import {
@@ -116,7 +120,20 @@ app.post("/api/careers/applications", applicationLimiter, express.json({ limit: 
     resumeType,
     resumeBuffer,
   ]);
-  return response.status(201).json({ applicationNumber: `OP-${result.lastInsertRowid}` });
+  const applicationNumber = `OP-${result.lastInsertRowid}`;
+  const notifications = await sendCareerApplicationNotifications({
+    applicationNumber,
+    firstName: firstName.trim(),
+    lastName: lastName.trim(),
+    email: email.trim().toLowerCase(),
+    phone: phone.trim(),
+    desiredPosition,
+    message: message.trim(),
+    resumeName: safeResumeName,
+    resumeType,
+    resumeData: resumeBuffer,
+  });
+  return response.status(201).json({ applicationNumber, notifications });
 });
 app.use(express.json({ limit: "32kb" }));
 
