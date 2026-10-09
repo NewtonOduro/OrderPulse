@@ -1027,7 +1027,6 @@ function App() {
               {bookingMessage && <p role="status" className="mt-4 rounded-xl bg-leaf/10 p-3 text-sm text-leaf">{bookingMessage}</p>}
               {bookingNotifications && <div className="mt-2 rounded-xl bg-[#e9eee4] p-3 text-xs text-forest/70" role="status">
                 <p>Email: {bookingNotifications.email.message}</p>
-                <p className="mt-1">SMS: {bookingNotifications.sms.message}</p>
               </div>}
               {customerReservations.length > 0 && <div className="mt-6 border-t border-forest/10 pt-5"><h4 className="font-display text-lg font-semibold">Your reservations</h4><div className="mt-3 grid gap-2">{customerReservations.map((reservation) => <div key={reservation.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-cream p-3"><div><p className="text-xs font-semibold">{reservation.date} · {reservation.time}</p><p className="mt-1 text-[10px] text-forest/50">{reservation.partySize} guests{reservation.tableName ? ` · ${reservation.tableName}` : ""}</p></div><span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-semibold capitalize text-amber-800">{reservation.status}</span></div>)}</div></div>}
             </form>
@@ -1123,7 +1122,7 @@ function App() {
             <p className="text-xs text-forest/60">{orderReceipt.orderType === "dine-in" ? "Dine in" : "Pickup"} · {new Date(orderReceipt.createdAt).toLocaleString("en-GH", { dateStyle: "medium", timeStyle: "short" })}</p>
           </div>
           <div className="receipt-delivery mt-5 rounded-xl bg-white p-3 text-xs" role="status">
-            <p>Email: {orderReceipt.notifications.email.message}</p><p className="mt-1">SMS: {orderReceipt.notifications.sms.message}</p>
+            <p>Email: {orderReceipt.notifications.email.message}</p>
           </div>
           <div className="mt-4 rounded-xl bg-white p-3 text-sm" aria-live="polite">
             <div className="flex items-center justify-between gap-3"><span className="text-forest/55">Order status</span><span className={`status-pill status-${trackingOrder?.orderNumber === orderReceipt.orderNumber ? trackingOrder.status : orderReceipt.status}`}>{trackingOrder?.orderNumber === orderReceipt.orderNumber ? trackingOrder.status : orderReceipt.status}</span></div>
@@ -1149,7 +1148,7 @@ function App() {
               <h3>Your contact details</h3>
               <label className="field-label">Your name<input required name="customerName" minLength="2" maxLength="80" autoComplete="name" placeholder="e.g. Ama Mensah" /></label>
               <label className="field-label">Email for your receipt<input required name="customerEmail" type="email" maxLength="254" autoComplete="email" placeholder="you@example.com" /></label>
-              <label className="field-label">Phone number for SMS<input required name="phone" minLength="7" maxLength="30" type="tel" autoComplete="tel" placeholder="+233 24 000 0000" /></label>
+              <label className="field-label">Phone number<input required name="phone" minLength="7" maxLength="30" type="tel" autoComplete="tel" placeholder="+233 24 000 0000" /></label>
             </section>
             <button disabled={busy || cart.length === 0} className="checkout-submit">{busy ? "Placing your order…" : `Place order · ${money(subtotal)}`}</button>
             {orderMessage && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{orderMessage}</p>}

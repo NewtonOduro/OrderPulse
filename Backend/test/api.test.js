@@ -11,9 +11,6 @@ for (const key of [
   "SMTP_PASS",
   "SMTP_FROM",
   "JOB_APPLICATION_NOTIFICATION_EMAIL",
-  "HUBTEL_CLIENT_ID",
-  "HUBTEL_CLIENT_SECRET",
-  "HUBTEL_SENDER_ID",
 ]) {
   process.env[key] = "";
 }
@@ -104,7 +101,7 @@ test("orders are validated and persisted with a cedi total", async () => {
   assert.equal(result.customerEmail, "ama@example.com");
   assert.equal(result.items[0].name, firstItem.name);
   assert.equal(result.notifications.email.status, "not_configured");
-  assert.equal(result.notifications.sms.status, "not_configured");
+  assert.deepEqual(Object.keys(result.notifications), ["email"]);
 
   const lookup = (lookupPhone) =>
     fetch(`${baseUrl}/api/order-tracking`, {
@@ -194,7 +191,7 @@ test("customers must create an account or sign in before reserving", async () =>
   assert.equal(authenticatedBooking.status, 201);
   assert.equal(result.status, "requested");
   assert.equal(result.notifications.email.status, "not_configured");
-  assert.equal(result.notifications.sms.status, "not_configured");
+  assert.deepEqual(Object.keys(result.notifications), ["email"]);
   const customerBookings = await fetch(`${baseUrl}/api/customer/reservations`, { headers: { cookie: customerCookie } });
   assert.equal((await customerBookings.json()).length, 1);
 
@@ -209,7 +206,7 @@ test("customers must create an account or sign in before reserving", async () =>
   assert.equal(cancelled.status, 200);
   assert.equal(cancelledResult.status, "cancelled");
   assert.equal(cancelledResult.notifications.email.status, "not_configured");
-  assert.equal(cancelledResult.notifications.sms.status, "not_configured");
+  assert.deepEqual(Object.keys(cancelledResult.notifications), ["email"]);
   const unchanged = await cancelReservation();
   assert.equal(unchanged.status, 200);
   assert.equal((await unchanged.json()).notifications, undefined);
