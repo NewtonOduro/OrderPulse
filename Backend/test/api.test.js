@@ -1,12 +1,9 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import bcrypt from "bcryptjs";
 
-const databaseDirectory = mkdtempSync(join(tmpdir(), "restaurant-test-"));
-process.env.DATABASE_PATH = join(databaseDirectory, "test.sqlite");
+process.env.PG_MEM_TEST = "1";
 const { app } = await import("../src/app.js");
 const { db } = await import("../src/database.js");
 let server;
@@ -19,11 +16,11 @@ function sessionCookie(response) {
 
 before(async () => {
   const passwordHash = await bcrypt.hash("test-manager-password-123", 4);
-  db.prepare("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, 'manager')").run(
+  await db.run("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, 'manager')", [
     "Test Manager",
     "manager@test.example",
     passwordHash,
-  );
+  ]);
   server = app.listen(0);
   await new Promise((resolve) => server.once("listening", resolve));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
@@ -37,8 +34,7 @@ before(async () => {
 
 after(async () => {
   await new Promise((resolve) => server.close(resolve));
-  db.close();
-  rmSync(databaseDirectory, { recursive: true, force: true });
+  await db.close();
 });
 
 test("menu API returns items priced in Ghana cedis", async () => {
@@ -351,6 +347,14 @@ test("individual staff accounts manage service while manager can see named activ
   const activities = await managerActivities.json();
   assert.ok(activities.some((activity) => activity.actorName === "Kitchen Lead" && activity.entity === "orders"));
   assert.ok(activities.some((activity) => activity.actorName === "Test Manager" && activity.entity === "team"));
+  assert.ok(activities.every((activity) => typeof activity.createdAt === "string"));
+
+  const summary = await fetch(`${baseUrl}/api/manager/summary`, { headers: managerHeaders });
+  assert.equal(summary.status, 200);
+  assert.equal(typeof (await summary.json()).activeStaff, "number");
+  const staffSummary = await fetch(`${baseUrl}/api/staff/summary`, { headers });
+  assert.equal(staffSummary.status, 200);
+  assert.equal(typeof (await staffSummary.json()).ordersToday, "number");
 });
 
 test("managers can add, edit, categorize, stock, and toggle menu items", async () => {
@@ -389,6 +393,22 @@ test("managers can add, edit, categorize, stock, and toggle menu items", async (
   assert.equal(item.price, 18.5);
   assert.equal(item.stockQuantity, 2);
   assert.equal(item.lowStockThreshold, 1);
+
+  const duplicateItem = await fetch(`${baseUrl}/api/staff/menu`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      name: "TEST SOBOLO",
+      description: "A second listing for the same menu item.",
+      category: "Drinks",
+      subcategory: "Cold & Soft Drinks",
+      beverageGroup: "Non-Alcoholic Beverages",
+      price: 18.5,
+      imageUrl: "https://images.unsplash.com/photo-1513558161293-c96b2eab9b2b",
+    }),
+  });
+  assert.equal(duplicateItem.status, 400);
+  assert.match((await duplicateItem.json()).error, /already on the menu/i);
 
   const updateResponse = await fetch(`${baseUrl}/api/staff/menu/${item.id}`, {
     method: "PUT",

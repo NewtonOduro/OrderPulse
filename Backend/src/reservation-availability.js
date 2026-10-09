@@ -10,20 +10,24 @@ function previousDate(date) {
   return new Date(Date.parse(`${date}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
 }
 
-export function getAvailableTables(date, time, partySize, excludeBookingId = null) {
+export async function getAvailableTables(date, time, partySize, excludeBookingId = null, database = db) {
   const start = minutesFor(date, time);
   const end = start + reservationDurationMinutes;
   const booking = excludeBookingId === null
     ? null
-    : db.prepare("SELECT table_id FROM bookings WHERE id = ?").get(excludeBookingId);
-  const existingBookings = db.prepare(`
+    : await database.get("SELECT table_id FROM bookings WHERE id = ?", [excludeBookingId]);
+  const exclusion = excludeBookingId === null ? "" : "AND id != ?";
+  const bookingParameters = excludeBookingId === null
+    ? [previousDate(date), date]
+    : [previousDate(date), date, excludeBookingId];
+  const existingBookings = await database.all(`
     SELECT id, table_id, booking_date, booking_time
     FROM bookings
     WHERE table_id IS NOT NULL
       AND booking_date BETWEEN ? AND ?
       AND status IN ('confirmed', 'seated')
-      AND (? IS NULL OR id != ?)
-  `).all(previousDate(date), date, excludeBookingId, excludeBookingId);
+      ${exclusion}
+  `, bookingParameters);
   const occupiedTableIds = new Set();
 
   for (const existing of existingBookings) {
@@ -34,12 +38,12 @@ export function getAvailableTables(date, time, partySize, excludeBookingId = nul
 
   const now = Date.now() / 60_000;
   const currentDate = new Date().toISOString().slice(0, 10);
-  const tables = db.prepare(`
+  const tables = await database.all(`
     SELECT id, name, seats, status
     FROM restaurant_tables
     WHERE seats >= ?
     ORDER BY id
-  `).all(partySize);
+  `, [partySize]);
 
   return tables
     .filter((table) => {

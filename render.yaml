@@ -2,20 +2,16 @@ services:
   - type: web
     name: orderpulse
     runtime: node
-    plan: starter
+    plan: free
     region: frankfurt
     buildCommand: npm ci --prefix Backend && npm ci --prefix frontend && npm run build --prefix frontend
     startCommand: npm start --prefix Backend
     healthCheckPath: /api/health
-    disk:
-      name: orderpulse-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
       - key: NODE_ENV
         value: production
-      - key: DATABASE_PATH
-        value: /var/data/restaurant.sqlite
+      - key: DATABASE_URL
+        sync: false
       - key: ADMIN_NAME
         sync: false
       - key: ADMIN_EMAIL

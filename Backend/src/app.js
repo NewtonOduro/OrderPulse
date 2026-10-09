@@ -53,7 +53,7 @@ const applicationLimiter = rateLimit({
 
 if (process.env.NODE_ENV === "production") app.set("trust proxy", 1);
 
-app.post("/api/careers/applications", applicationLimiter, express.json({ limit: "7mb" }), (request, response) => {
+app.post("/api/careers/applications", applicationLimiter, express.json({ limit: "7mb" }), async (request, response) => {
   const {
     firstName,
     lastName,
@@ -100,12 +100,12 @@ app.post("/api/careers/applications", applicationLimiter, express.json({ limit: 
     return response.status(400).json({ error: "Complete all required fields, accept the privacy terms, and attach a PDF, DOC, or DOCX CV no larger than 5 MB." });
   }
 
-  const result = db.prepare(`
+  const result = await db.run(`
     INSERT INTO job_applications (
       first_name, last_name, email, phone, desired_position, message,
       resume_name, resume_type, resume_data, consent_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-  `).run(
+  `, [
     firstName.trim(),
     lastName.trim(),
     email.trim().toLowerCase(),
@@ -115,7 +115,7 @@ app.post("/api/careers/applications", applicationLimiter, express.json({ limit: 
     safeResumeName,
     resumeType,
     resumeBuffer,
-  );
+  ]);
   return response.status(201).json({ applicationNumber: `OP-${result.lastInsertRowid}` });
 });
 app.use(express.json({ limit: "32kb" }));
@@ -140,9 +140,9 @@ const staffMenuItem = (item) => ({
   lowStockThreshold: item.low_stock_threshold,
 });
 
-const menuItems = db.prepare(`
+const getMenuItems = () => db.all(`
   SELECT * FROM menu_items
-  WHERE available = 1 AND (stock_quantity IS NULL OR stock_quantity > 0)
+  WHERE available = TRUE AND (stock_quantity IS NULL OR stock_quantity > 0)
   ORDER BY id
 `);
 const validText = (value, min, max) =>
@@ -156,13 +156,14 @@ const validImageUrl = (value) => {
     return false;
   }
 };
-const normalizeMenuItemName = (value) => typeof value === "string" ? value.trim().replace(/\s+/g, " ").toLowerCase() : "";
-const menuItemExists = (name, excludeId = null) => {
+const cleanMenuItemName = (value) => value.trim().replace(/\s+/g, " ");
+const normalizeMenuItemName = (value) => typeof value === "string" ? cleanMenuItemName(value).toLowerCase() : "";
+const menuItemExists = async (name, excludeId = null) => {
   const query = excludeId === null
     ? "SELECT id FROM menu_items WHERE LOWER(name) = ?"
     : "SELECT id FROM menu_items WHERE LOWER(name) = ? AND id != ?";
   const params = excludeId === null ? [normalizeMenuItemName(name)] : [normalizeMenuItemName(name), excludeId];
-  return db.prepare(query).get(...params);
+  return db.get(query, params);
 };
 const getMenuPlacementError = (category, beverageGroup, subcategory) => {
   if (!menuCategories.includes(category)) return "Choose a valid menu category.";
@@ -202,6 +203,10 @@ const jobPositionTitles = [
 const minimumPasswordLength = 12;
 const maxMenuStock = 100000;
 const normalizedPhone = (phone) => phone.replace(/[^\d+]/g, "");
+const utcDayRange = (date) => [
+  `${date}T00:00:00.000Z`,
+  new Date(Date.parse(`${date}T00:00:00.000Z`) + 86_400_000).toISOString(),
+];
 const validBookingDate = (date) =>
   typeof date === "string" &&
   /^\d{4}-\d{2}-\d{2}$/.test(date) &&
@@ -231,15 +236,15 @@ app.post("/api/auth/register", authenticationLimiter, async (request, response) 
   }
   try {
     const passwordHash = await bcrypt.hash(password, 12);
-    const result = db.prepare(`
+    const result = await db.run(`
       INSERT INTO users (name, email, phone, password_hash, role)
       VALUES (?, ?, ?, ?, 'customer')
-    `).run(name.trim(), email.trim().toLowerCase(), phone.trim(), passwordHash);
-    const user = db.prepare("SELECT id, name, email, phone, role FROM users WHERE id = ?").get(result.lastInsertRowid);
-    setSession(response, user.id);
+    `, [name.trim(), email.trim().toLowerCase(), phone.trim(), passwordHash]);
+    const user = await db.get("SELECT id, name, email, phone, role FROM users WHERE id = ?", [result.lastInsertRowid]);
+    await setSession(response, user.id);
     return response.status(201).json({ user });
   } catch (error) {
-    if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return response.status(409).json({ error: "An account with this email already exists. Sign in instead." });
+    if (error.code === "23505") return response.status(409).json({ error: "An account with this email already exists. Sign in instead." });
     throw error;
   }
 });
@@ -249,25 +254,24 @@ app.post("/api/auth/login", authenticationLimiter, async (request, response) => 
   if (typeof email !== "string" || email.length > 254 || typeof password !== "string" || password.length > 128) {
     return response.status(400).json({ error: "Enter your email address and password." });
   }
-  const user = db.prepare("SELECT * FROM users WHERE email = ? COLLATE NOCASE").get(email.trim().toLowerCase());
+  const user = await db.get("SELECT * FROM users WHERE LOWER(email) = LOWER(?)", [email.trim().toLowerCase()]);
   if (!user || !user.active || !(await bcrypt.compare(password, user.password_hash))) {
     return response.status(401).json({ error: "The email or password is incorrect." });
   }
-  setSession(response, user.id);
+  await setSession(response, user.id);
   return response.json({ user: safeUser(user) });
 });
 
 app.get("/api/auth/me", requireUser, (request, response) => response.json({ user: request.user }));
 
-app.post("/api/auth/logout", (request, response) => {
-  clearSession(request, response);
+app.post("/api/auth/logout", async (request, response) => {
+  await clearSession(request, response);
   return response.status(204).end();
 });
 
-function readOrders() {
-  const orders = db.prepare("SELECT * FROM orders ORDER BY created_at DESC, id DESC").all();
-  const orderItems = db.prepare("SELECT * FROM order_items WHERE order_id = ? ORDER BY id");
-  return orders.map((order) => ({
+async function readOrders(database = db) {
+  const orders = await database.all("SELECT * FROM orders ORDER BY created_at DESC, id DESC");
+  return Promise.all(orders.map(async (order) => ({
     id: order.id,
     orderNumber: order.order_number,
     customerName: order.customer_name,
@@ -277,21 +281,21 @@ function readOrders() {
     status: order.status,
     createdAt: order.created_at,
     updatedAt: order.updated_at,
-    items: orderItems.all(order.id).map((item) => ({
+    items: (await database.all("SELECT * FROM order_items WHERE order_id = ? ORDER BY id", [order.id])).map((item) => ({
       name: item.item_name,
       quantity: item.quantity,
       unitPrice: item.unit_price_pesewas / 100,
     })),
-  }));
+  })));
 }
 
-function readTrackedOrder(order) {
-  const items = db.prepare(`
+async function readTrackedOrder(order) {
+  const items = await db.all(`
     SELECT item_name, quantity, unit_price_pesewas
     FROM order_items
     WHERE order_id = ?
     ORDER BY id
-  `).all(order.id);
+  `, [order.id]);
   return {
     orderNumber: order.order_number,
     status: order.status,
@@ -308,9 +312,9 @@ function readTrackedOrder(order) {
 }
 
 app.get("/api/health", (_request, response) => response.json({ status: "ok" }));
-app.get("/api/menu", (_request, response) =>
+app.get("/api/menu", async (_request, response) =>
   response.json(
-    menuItems.all()
+    (await getMenuItems())
       .map(publicMenuItem)
       .sort((first, second) =>
         menuCategories.indexOf(first.category) - menuCategories.indexOf(second.category) ||
@@ -319,7 +323,7 @@ app.get("/api/menu", (_request, response) =>
   ),
 );
 
-app.post("/api/order-tracking", orderLimiter, (request, response) => {
+app.post("/api/order-tracking", orderLimiter, async (request, response) => {
   const { orderNumber, phone } = request.body ?? {};
   if (
     typeof orderNumber !== "string" ||
@@ -328,14 +332,14 @@ app.post("/api/order-tracking", orderLimiter, (request, response) => {
   ) {
     return response.status(400).json({ error: "Enter the order number and phone number used at checkout." });
   }
-  const order = db.prepare("SELECT * FROM orders WHERE order_number = ? COLLATE NOCASE").get(orderNumber.trim());
+  const order = await db.get("SELECT * FROM orders WHERE LOWER(order_number) = LOWER(?)", [orderNumber.trim()]);
   if (!order || normalizedPhone(order.phone) !== normalizedPhone(phone.trim())) {
     return response.status(404).json({ error: "We couldn't find an order with those details." });
   }
-  return response.json(readTrackedOrder(order));
+  return response.json(await readTrackedOrder(order));
 });
 
-app.post("/api/orders", orderLimiter, (request, response) => {
+app.post("/api/orders", orderLimiter, async (request, response) => {
   const { customerName, customerEmail, phone, orderType, items } = request.body ?? {};
   if (
     !validText(customerName, 2, 80) ||
@@ -363,45 +367,46 @@ app.post("/api/orders", orderLimiter, (request, response) => {
   }
 
   const requestedItems = [...quantities].map(([id, quantity]) => ({ id, quantity }));
-  const findItem = db.prepare(`
-    SELECT * FROM menu_items
-    WHERE id = ? AND available = 1 AND (stock_quantity IS NULL OR stock_quantity > 0)
-  `);
-  const orderTransaction = db.transaction(() => {
-    const resolvedItems = requestedItems.map(({ id, quantity }) => {
-      const item = findItem.get(id);
+  try {
+    const order = await db.transaction(async (tx) => {
+      const resolvedItems = [];
+      for (const { id, quantity } of requestedItems) {
+        const item = await tx.get(`
+          SELECT * FROM menu_items
+          WHERE id = ? AND available = TRUE AND (stock_quantity IS NULL OR stock_quantity > 0)
+          FOR UPDATE
+        `, [id]);
       if (!item) throw new Error("MENU_ITEM_UNAVAILABLE");
       if (item.stock_quantity !== null && item.stock_quantity < quantity) {
         throw new Error("MENU_ITEM_STOCK_INSUFFICIENT");
       }
-      return { item, quantity };
-    });
-    const decrementStock = db.prepare(`
-      UPDATE menu_items
-      SET stock_quantity = stock_quantity - ?
-      WHERE id = ? AND stock_quantity IS NOT NULL AND stock_quantity >= ?
-    `);
-    for (const { item, quantity } of resolvedItems) {
-      if (item.stock_quantity !== null && decrementStock.run(quantity, item.id, quantity).changes !== 1) {
-        throw new Error("MENU_ITEM_STOCK_INSUFFICIENT");
+        resolvedItems.push({ item, quantity });
       }
-    }
+      for (const { item, quantity } of resolvedItems) {
+        if (item.stock_quantity !== null) {
+          const result = await tx.run(`
+            UPDATE menu_items
+            SET stock_quantity = ?
+            WHERE id = ? AND stock_quantity = ?
+          `, [item.stock_quantity - quantity, item.id, item.stock_quantity]);
+          if (result.changes !== 1) throw new Error("MENU_ITEM_STOCK_INSUFFICIENT");
+        }
+      }
     const totalPesewas = resolvedItems.reduce(
       (total, { item, quantity }) => total + item.price_pesewas * quantity,
       0,
     );
     const orderNumber = `GH-${randomBytes(16).toString("hex").toUpperCase()}`;
-    const order = db.prepare(`
+    const insertedOrder = await tx.run(`
       INSERT INTO orders (order_number, customer_name, customer_email, phone, order_type, total_pesewas)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(orderNumber, customerName.trim(), customerEmail.trim().toLowerCase(), phone.trim(), orderType, totalPesewas);
-    const insertOrderItem = db.prepare(`
-      INSERT INTO order_items (order_id, menu_item_id, item_name, unit_price_pesewas, quantity)
-      VALUES (?, ?, ?, ?, ?)
-    `);
-    resolvedItems.forEach(({ item, quantity }) =>
-      insertOrderItem.run(order.lastInsertRowid, item.id, item.name, item.price_pesewas, quantity),
-    );
+    `, [orderNumber, customerName.trim(), customerEmail.trim().toLowerCase(), phone.trim(), orderType, totalPesewas]);
+    for (const { item, quantity } of resolvedItems) {
+      await tx.run(`
+        INSERT INTO order_items (order_id, menu_item_id, item_name, unit_price_pesewas, quantity)
+        VALUES (?, ?, ?, ?, ?)
+      `, [insertedOrder.lastInsertRowid, item.id, item.name, item.price_pesewas, quantity]);
+    }
     return {
       orderNumber,
       customerName: customerName.trim(),
@@ -417,13 +422,9 @@ app.post("/api/orders", orderLimiter, (request, response) => {
         unitPrice: item.price_pesewas / 100,
       })),
     };
-  });
-
-  try {
-    const order = orderTransaction();
-    return sendOrderNotifications(order).then((notifications) =>
-      response.status(201).json({ ...order, notifications }),
-    );
+    });
+    const notifications = await sendOrderNotifications(order);
+    return response.status(201).json({ ...order, notifications });
   } catch (error) {
     if (["MENU_ITEM_UNAVAILABLE", "MENU_ITEM_STOCK_INSUFFICIENT"].includes(error.message)) {
       return response.status(409).json({ error: "A selected menu item is unavailable or there isn't enough stock. Refresh the menu and try again." });
@@ -432,7 +433,7 @@ app.post("/api/orders", orderLimiter, (request, response) => {
   }
 });
 
-app.get("/api/reservation-availability", (request, response) => {
+app.get("/api/reservation-availability", async (request, response) => {
   const { date, time } = request.query;
   const partySize = Number(request.query.partySize);
   if (
@@ -448,7 +449,7 @@ app.get("/api/reservation-availability", (request, response) => {
   if (!bookingStartsInFuture(date, time)) {
     return response.status(400).json({ error: "Choose a reservation time in the future." });
   }
-  const tables = getAvailableTables(date, time, partySize);
+  const tables = await getAvailableTables(date, time, partySize);
   return response.json({ date, time, partySize, durationMinutes: reservationDurationMinutes, tables });
 });
 
@@ -469,14 +470,14 @@ app.post("/api/bookings", reservationLimiter, requireUser, requireCustomer, asyn
   if (!bookingStartsInFuture(date, time)) {
     return response.status(400).json({ error: "Choose a reservation time in the future." });
   }
-  if (getAvailableTables(date, time, partySize).length === 0) {
+  if ((await getAvailableTables(date, time, partySize)).length === 0) {
     return response.status(409).json({ error: "No tables are available for that time and party size. Please choose another time." });
   }
 
-  const booking = db.prepare(`
+  const booking = await db.run(`
     INSERT INTO bookings (customer_name, phone, booking_date, booking_time, party_size, notes, customer_user_id)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(request.user.name, request.user.phone, date, time, partySize, notes.trim(), request.user.id);
+  `, [request.user.name, request.user.phone, date, time, partySize, notes.trim(), request.user.id]);
 
   const reservation = {
     id: Number(booking.lastInsertRowid),
@@ -499,13 +500,13 @@ app.post("/api/bookings", reservationLimiter, requireUser, requireCustomer, asyn
   });
 });
 
-app.get("/api/customer/reservations", requireUser, requireCustomer, (request, response) => {
-  const reservations = db.prepare(`
+app.get("/api/customer/reservations", requireUser, requireCustomer, async (request, response) => {
+  const reservations = (await db.all(`
     SELECT b.id, b.booking_date, b.booking_time, b.party_size, b.notes, b.status, t.name AS table_name
     FROM bookings b LEFT JOIN restaurant_tables t ON t.id = b.table_id
     WHERE b.customer_user_id = ?
     ORDER BY b.booking_date DESC, b.booking_time DESC
-  `).all(request.user.id).map((booking) => ({
+  `, [request.user.id])).map((booking) => ({
     id: booking.id,
     date: booking.booking_date,
     time: booking.booking_time,
@@ -520,58 +521,68 @@ app.get("/api/customer/reservations", requireUser, requireCustomer, (request, re
 app.use("/api/staff", requireUser, requireStaff, auditStaffActivity);
 app.use("/api/manager", requireUser, requireManager, auditStaffActivity);
 
-app.get("/api/manager/summary", (_request, response) => {
-  const today = new Date().toISOString().slice(0, 10);
-  const ordersToday = db.prepare("SELECT COUNT(*) AS count FROM orders WHERE date(created_at) = ?").get(today).count;
-  const salesToday = db.prepare("SELECT COALESCE(SUM(total_pesewas), 0) AS total FROM orders WHERE date(created_at) = ? AND status != 'cancelled'").get(today).total;
-  const activeTickets = db.prepare("SELECT COUNT(*) AS count FROM orders WHERE status IN ('received', 'preparing', 'ready')").get().count;
-  const pendingBookings = db.prepare("SELECT COUNT(*) AS count FROM bookings WHERE status = 'requested'").get().count;
-  const occupiedTables = db.prepare("SELECT COUNT(*) AS count FROM restaurant_tables WHERE status = 'occupied'").get().count;
-  const activeStaff = db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'staff' AND active = 1").get().count;
-  const activityCount = db.prepare("SELECT COUNT(*) AS count FROM activity_logs").get().count;
-  return response.json({ ordersToday, salesToday: salesToday / 100, activeTickets, pendingBookings, occupiedTables, activeStaff, activityCount });
+app.get("/api/manager/summary", async (_request, response) => {
+  const [dayStart, nextDayStart] = utcDayRange(new Date().toISOString().slice(0, 10));
+  const [orders, sales, tickets, bookings, tables, staff, activity] = await Promise.all([
+    db.get("SELECT COUNT(*) AS count FROM orders WHERE created_at >= ? AND created_at < ?", [dayStart, nextDayStart]),
+    db.get("SELECT COALESCE(SUM(total_pesewas), 0) AS total FROM orders WHERE created_at >= ? AND created_at < ? AND status != 'cancelled'", [dayStart, nextDayStart]),
+    db.get("SELECT COUNT(*) AS count FROM orders WHERE status IN ('received', 'preparing', 'ready')"),
+    db.get("SELECT COUNT(*) AS count FROM bookings WHERE status = 'requested'"),
+    db.get("SELECT COUNT(*) AS count FROM restaurant_tables WHERE status = 'occupied'"),
+    db.get("SELECT COUNT(*) AS count FROM users WHERE role = 'staff' AND active = TRUE"),
+    db.get("SELECT COUNT(*) AS count FROM activity_logs"),
+  ]);
+  return response.json({
+    ordersToday: Number(orders.count),
+    salesToday: Number(sales.total) / 100,
+    activeTickets: Number(tickets.count),
+    pendingBookings: Number(bookings.count),
+    occupiedTables: Number(tables.count),
+    activeStaff: Number(staff.count),
+    activityCount: Number(activity.count),
+  });
 });
 
-app.get("/api/manager/activities", (request, response) => {
+app.get("/api/manager/activities", async (request, response) => {
   const requestedLimit = Number(request.query.limit);
   const limit = Number.isInteger(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 200)) : 100;
-  const rows = db.prepare(`
-    SELECT id, actor_name AS actorName, actor_email AS actorEmail, action, entity, entity_id AS entityId, details, created_at AS createdAt
+  const rows = await db.all(`
+    SELECT id, actor_name AS "actorName", actor_email AS "actorEmail", action, entity, entity_id AS "entityId", details, created_at AS "createdAt"
     FROM activity_logs
     ORDER BY id DESC
     LIMIT ?
-  `).all(limit);
+  `, [limit]);
   return response.json(rows);
 });
 
-app.get("/api/manager/staff", (_request, response) => {
-  const users = db.prepare(`
-    SELECT id, name, email, role, active, created_at AS createdAt
+app.get("/api/manager/staff", async (_request, response) => {
+  const users = (await db.all(`
+    SELECT id, name, email, role, active, created_at AS "createdAt"
     FROM users WHERE role IN ('staff', 'manager') ORDER BY role, name
-  `).all().map((user) => ({ ...user, active: Boolean(user.active) }));
+  `)).map((user) => ({ ...user, active: Boolean(user.active) }));
   return response.json(users);
 });
 
-app.get("/api/manager/applications", (_request, response) => {
-  const applications = db.prepare(`
-    SELECT id, first_name AS firstName, last_name AS lastName, email, phone,
-      desired_position AS desiredPosition, message, resume_name AS resumeName,
-      created_at AS createdAt
+app.get("/api/manager/applications", async (_request, response) => {
+  const applications = await db.all(`
+    SELECT id, first_name AS "firstName", last_name AS "lastName", email, phone,
+      desired_position AS "desiredPosition", message, resume_name AS "resumeName",
+      created_at AS "createdAt"
     FROM job_applications
     ORDER BY id DESC
-  `).all();
+  `);
   return response.json(applications);
 });
 
-app.get("/api/manager/applications/:id/resume", (request, response) => {
+app.get("/api/manager/applications/:id/resume", async (request, response) => {
   const applicationId = Number(request.params.id);
   if (!Number.isSafeInteger(applicationId) || applicationId < 1) {
     return response.status(400).json({ error: "Invalid application." });
   }
-  const application = db.prepare(`
-    SELECT resume_name AS resumeName, resume_type AS resumeType, resume_data AS resumeData
+  const application = await db.get(`
+    SELECT resume_name AS "resumeName", resume_type AS "resumeType", resume_data AS "resumeData"
     FROM job_applications WHERE id = ?
-  `).get(applicationId);
+  `, [applicationId]);
   if (!application) return response.status(404).json({ error: "Application not found." });
   response.set("Content-Type", application.resumeType);
   response.set("Content-Disposition", `attachment; filename="${application.resumeName}"`);
@@ -594,80 +605,89 @@ app.post("/api/manager/staff", async (request, response) => {
   }
   try {
     const passwordHash = await bcrypt.hash(password, 12);
-    const result = db.prepare(`
+    const result = await db.run(`
       INSERT INTO users (name, email, password_hash, role)
       VALUES (?, ?, ?, 'staff')
-    `).run(name.trim(), email.trim().toLowerCase(), passwordHash);
-    const staff = db.prepare(`
-      SELECT id, name, email, role, active, created_at AS createdAt FROM users WHERE id = ?
-    `).get(result.lastInsertRowid);
+    `, [name.trim(), email.trim().toLowerCase(), passwordHash]);
+    const staff = await db.get(`
+      SELECT id, name, email, role, active, created_at AS "createdAt" FROM users WHERE id = ?
+    `, [result.lastInsertRowid]);
     return response.status(201).json({ ...staff, active: Boolean(staff.active) });
   } catch (error) {
-    if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return response.status(409).json({ error: "An account with this email already exists." });
+    if (error.code === "23505") return response.status(409).json({ error: "An account with this email already exists." });
     throw error;
   }
 });
 
-app.patch("/api/manager/staff/:id", (request, response) => {
+app.patch("/api/manager/staff/:id", async (request, response) => {
   const staffId = Number(request.params.id);
   const { active } = request.body ?? {};
   if (!Number.isInteger(staffId) || typeof active !== "boolean") {
     return response.status(400).json({ error: "Choose whether this staff account should be active." });
   }
-  const result = db.prepare("UPDATE users SET active = ? WHERE id = ? AND role = 'staff'").run(active ? 1 : 0, staffId);
+  const result = await db.run("UPDATE users SET active = ? WHERE id = ? AND role = 'staff'", [active, staffId]);
   if (result.changes === 0) return response.status(404).json({ error: "Staff account not found." });
-  const staff = db.prepare(`
-    SELECT id, name, email, role, active, created_at AS createdAt FROM users WHERE id = ?
-  `).get(staffId);
-  if (!active) db.prepare("DELETE FROM sessions WHERE user_id = ?").run(staffId);
+  const staff = await db.get(`
+    SELECT id, name, email, role, active, created_at AS "createdAt" FROM users WHERE id = ?
+  `, [staffId]);
+  if (!active) await db.run("DELETE FROM sessions WHERE user_id = ?", [staffId]);
   return response.json({ ...staff, active: Boolean(staff.active) });
 });
 
-app.get("/api/staff/summary", (_request, response) => {
-  const today = new Date().toISOString().slice(0, 10);
-  const ordersToday = db.prepare("SELECT COUNT(*) AS count FROM orders WHERE date(created_at) = ?").get(today).count;
-  const salesToday = db.prepare("SELECT COALESCE(SUM(total_pesewas), 0) AS total FROM orders WHERE date(created_at) = ? AND status != 'cancelled'").get(today).total;
-  const activeTickets = db.prepare("SELECT COUNT(*) AS count FROM orders WHERE status IN ('received', 'preparing', 'ready')").get().count;
-  const pendingBookings = db.prepare("SELECT COUNT(*) AS count FROM bookings WHERE status = 'requested'").get().count;
-  const occupiedTables = db.prepare("SELECT COUNT(*) AS count FROM restaurant_tables WHERE status = 'occupied'").get().count;
-  response.json({ ordersToday, salesToday: salesToday / 100, activeTickets, pendingBookings, occupiedTables });
+app.get("/api/staff/summary", async (_request, response) => {
+  const [dayStart, nextDayStart] = utcDayRange(new Date().toISOString().slice(0, 10));
+  const [orders, sales, tickets, bookings, tables] = await Promise.all([
+    db.get("SELECT COUNT(*) AS count FROM orders WHERE created_at >= ? AND created_at < ?", [dayStart, nextDayStart]),
+    db.get("SELECT COALESCE(SUM(total_pesewas), 0) AS total FROM orders WHERE created_at >= ? AND created_at < ? AND status != 'cancelled'", [dayStart, nextDayStart]),
+    db.get("SELECT COUNT(*) AS count FROM orders WHERE status IN ('received', 'preparing', 'ready')"),
+    db.get("SELECT COUNT(*) AS count FROM bookings WHERE status = 'requested'"),
+    db.get("SELECT COUNT(*) AS count FROM restaurant_tables WHERE status = 'occupied'"),
+  ]);
+  response.json({
+    ordersToday: Number(orders.count),
+    salesToday: Number(sales.total) / 100,
+    activeTickets: Number(tickets.count),
+    pendingBookings: Number(bookings.count),
+    occupiedTables: Number(tables.count),
+  });
 });
 
-app.get("/api/staff/tables", (_request, response) => {
-  const tables = db.prepare("SELECT * FROM restaurant_tables ORDER BY id").all();
+app.get("/api/staff/tables", async (_request, response) => {
+  const tables = await db.all("SELECT * FROM restaurant_tables ORDER BY id");
   response.json(tables);
 });
 
-app.post("/api/staff/tables", (request, response) => {
+app.post("/api/staff/tables", async (request, response) => {
   const { name, seats } = request.body ?? {};
   if (!validText(name, 2, 40) || !Number.isInteger(seats) || seats < 1 || seats > 20) {
     return response.status(400).json({ error: "Enter a table name and capacity between 1 and 20." });
   }
   try {
-    const table = db.prepare("INSERT INTO restaurant_tables (name, seats) VALUES (?, ?)").run(name.trim(), seats);
-    return response.status(201).json(db.prepare("SELECT * FROM restaurant_tables WHERE id = ?").get(table.lastInsertRowid));
+    const table = await db.run("INSERT INTO restaurant_tables (name, seats) VALUES (?, ?)", [name.trim(), seats]);
+    return response.status(201).json(await db.get("SELECT * FROM restaurant_tables WHERE id = ?", [table.lastInsertRowid]));
   } catch (error) {
-    if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return response.status(409).json({ error: "That table name is already in use." });
+    if (error.code === "23505") return response.status(409).json({ error: "That table name is already in use." });
     throw error;
   }
 });
 
-app.patch("/api/staff/tables/:id", (request, response) => {
+app.patch("/api/staff/tables/:id", async (request, response) => {
   const { status } = request.body ?? {};
   if (!Number.isInteger(Number(request.params.id)) || !["available", "occupied", "reserved"].includes(status)) {
     return response.status(400).json({ error: "Choose a valid table status." });
   }
-  const result = db.prepare("UPDATE restaurant_tables SET status = ? WHERE id = ?").run(status, request.params.id);
+  const result = await db.run("UPDATE restaurant_tables SET status = ? WHERE id = ?", [status, request.params.id]);
   if (result.changes === 0) return response.status(404).json({ error: "Table not found." });
-  return response.json(db.prepare("SELECT * FROM restaurant_tables WHERE id = ?").get(request.params.id));
+  return response.json(await db.get("SELECT * FROM restaurant_tables WHERE id = ?", [request.params.id]));
 });
 
-app.get("/api/staff/reservations", (_request, response) => {
-  const reservations = db.prepare(`
+app.get("/api/staff/reservations", async (_request, response) => {
+  const bookings = await db.all(`
     SELECT b.*, t.name AS table_name
     FROM bookings b LEFT JOIN restaurant_tables t ON t.id = b.table_id
     ORDER BY b.booking_date, b.booking_time, b.id DESC
-  `).all().map((booking) => ({
+  `);
+  const reservations = await Promise.all(bookings.map(async (booking) => ({
     id: booking.id,
     customerName: booking.customer_name,
     phone: booking.phone,
@@ -678,15 +698,15 @@ app.get("/api/staff/reservations", (_request, response) => {
     status: booking.status,
     tableId: booking.table_id,
     tableName: booking.table_name,
-    availableTables: getAvailableTables(booking.booking_date, booking.booking_time, booking.party_size, booking.id),
-  }));
+    availableTables: await getAvailableTables(booking.booking_date, booking.booking_time, booking.party_size, booking.id),
+  })));
   response.json(reservations);
 });
 
 app.patch("/api/staff/reservations/:id", async (request, response) => {
   const { status, tableId = null } = request.body ?? {};
   const bookingId = Number(request.params.id);
-  const booking = db.prepare("SELECT * FROM bookings WHERE id = ?").get(bookingId);
+  const booking = await db.get("SELECT * FROM bookings WHERE id = ?", [bookingId]);
   if (!booking) return response.status(404).json({ error: "Reservation not found." });
   if (!bookingStatuses.includes(status)) return response.status(400).json({ error: "Choose a valid reservation status." });
   if (["confirmed", "seated"].includes(status) && tableId === null) {
@@ -696,39 +716,42 @@ app.patch("/api/staff/reservations/:id", async (request, response) => {
   let selectedTable = null;
   if (tableId !== null) {
     if (!Number.isInteger(tableId)) return response.status(400).json({ error: "Choose a valid table." });
-    selectedTable = db.prepare("SELECT * FROM restaurant_tables WHERE id = ?").get(tableId);
+    selectedTable = await db.get("SELECT * FROM restaurant_tables WHERE id = ?", [tableId]);
     if (!selectedTable || selectedTable.seats < booking.party_size) {
       return response.status(400).json({ error: "That table cannot seat this party." });
     }
   }
 
-  const updateBooking = db.transaction(() => {
+  const updateBooking = async (tx) => {
+    if (selectedTable && ["confirmed", "seated"].includes(status)) {
+      await tx.get("SELECT id FROM restaurant_tables WHERE id = ? FOR UPDATE", [selectedTable.id]);
+    }
     if (
       selectedTable &&
       ["confirmed", "seated"].includes(status) &&
-      !getAvailableTables(booking.booking_date, booking.booking_time, booking.party_size, bookingId)
+      !(await getAvailableTables(booking.booking_date, booking.booking_time, booking.party_size, bookingId, tx))
         .some((table) => table.id === selectedTable.id)
     ) {
       throw new Error("RESERVATION_TABLE_UNAVAILABLE");
     }
-    db.prepare("UPDATE bookings SET status = ?, table_id = ? WHERE id = ?").run(status, tableId, bookingId);
+    await tx.run("UPDATE bookings SET status = ?, table_id = ? WHERE id = ?", [status, tableId, bookingId]);
     if (booking.table_id && booking.table_id !== tableId) {
-      db.prepare("UPDATE restaurant_tables SET status = 'available' WHERE id = ? AND status = 'reserved'").run(booking.table_id);
+      await tx.run("UPDATE restaurant_tables SET status = 'available' WHERE id = ? AND status = 'reserved'", [booking.table_id]);
     }
     if (selectedTable && ["confirmed", "seated"].includes(status)) {
-      db.prepare("UPDATE restaurant_tables SET status = ? WHERE id = ?").run(status === "seated" ? "occupied" : "reserved", tableId);
+      await tx.run("UPDATE restaurant_tables SET status = ? WHERE id = ?", [status === "seated" ? "occupied" : "reserved", tableId]);
     }
     if (selectedTable && ["completed", "cancelled"].includes(status)) {
-      db.prepare("UPDATE restaurant_tables SET status = 'available' WHERE id = ?").run(tableId);
+      await tx.run("UPDATE restaurant_tables SET status = 'available' WHERE id = ?", [tableId]);
     }
-    return db.prepare(`
+    return tx.get(`
       SELECT b.*, t.name AS table_name FROM bookings b
       LEFT JOIN restaurant_tables t ON t.id = b.table_id WHERE b.id = ?
-    `).get(bookingId);
-  });
+    `, [bookingId]);
+  };
   let updated;
   try {
-    updated = updateBooking();
+    updated = await db.transaction(updateBooking);
   } catch (error) {
     if (error.message === "RESERVATION_TABLE_UNAVAILABLE") {
       return response.status(409).json({ error: "That table is no longer available for this time. Refresh the reservation and choose another table." });
@@ -749,7 +772,7 @@ app.patch("/api/staff/reservations/:id", async (request, response) => {
   };
   if (booking.status !== updated.status) {
     const customer = booking.customer_user_id
-      ? db.prepare("SELECT email FROM users WHERE id = ?").get(booking.customer_user_id)
+      ? await db.get("SELECT email FROM users WHERE id = ?", [booking.customer_user_id])
       : null;
     result.notifications = await sendReservationNotifications({
       ...result,
@@ -759,11 +782,11 @@ app.patch("/api/staff/reservations/:id", async (request, response) => {
   return response.json(result);
 });
 
-app.get("/api/staff/menu", (_request, response) => {
-  response.json(db.prepare("SELECT * FROM menu_items ORDER BY id DESC").all().map(staffMenuItem));
+app.get("/api/staff/menu", async (_request, response) => {
+  response.json((await db.all("SELECT * FROM menu_items ORDER BY id DESC")).map(staffMenuItem));
 });
 
-app.post("/api/staff/menu", (request, response) => {
+app.post("/api/staff/menu", async (request, response) => {
   if (request.user.role !== "manager") return response.status(403).json({ error: "Manager access is required to add menu items." });
   const {
     name,
@@ -778,6 +801,7 @@ app.post("/api/staff/menu", (request, response) => {
     lowStockThreshold = 5,
   } = request.body ?? {};
   const placementError = getMenuPlacementError(category, beverageGroup || null, subcategory);
+  const duplicateExists = await menuItemExists(name);
   if (
     !validText(name, 2, 80) ||
     !validText(description, 5, 300) ||
@@ -791,21 +815,21 @@ app.post("/api/staff/menu", (request, response) => {
     !Number.isInteger(lowStockThreshold) ||
     lowStockThreshold < 0 ||
     lowStockThreshold > maxMenuStock ||
-    menuItemExists(name)
+    duplicateExists
   ) {
-    const message = menuItemExists(name)
+    const message = duplicateExists
       ? "This meal or food is already on the menu. Please use a different item or move the existing one to the correct category."
       : placementError || "Choose a valid menu category, drink type and subcategory, and check the item details, stock and price.";
     return response.status(400).json({ error: message });
   }
   const savedBeverageGroup = category === "Drinks" ? beverageGroup : null;
-  const result = db.prepare(`
+  const result = await db.run(`
     INSERT INTO menu_items (
       name, description, category, subcategory, price_pesewas, image_url, badge, stock_quantity, low_stock_threshold, beverage_group
     )
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    name.trim(),
+  `, [
+    cleanMenuItemName(name),
     description.trim(),
     category,
     subcategory.trim(),
@@ -815,15 +839,16 @@ app.post("/api/staff/menu", (request, response) => {
     stockQuantity,
     lowStockThreshold,
     savedBeverageGroup,
-  );
-  return response.status(201).json(staffMenuItem(db.prepare("SELECT * FROM menu_items WHERE id = ?").get(result.lastInsertRowid)));
+  ]);
+  return response.status(201).json(staffMenuItem(await db.get("SELECT * FROM menu_items WHERE id = ?", [result.lastInsertRowid])));
 });
 
-app.put("/api/staff/menu/:id", (request, response) => {
+app.put("/api/staff/menu/:id", async (request, response) => {
   if (request.user.role !== "manager") return response.status(403).json({ error: "Manager access is required to edit menu items." });
   const itemId = Number(request.params.id);
   const { name, description, category, subcategory, beverageGroup, price, imageUrl, badge = "" } = request.body ?? {};
   const placementError = getMenuPlacementError(category, category === "Drinks" ? beverageGroup : beverageGroup || null, subcategory);
+  const duplicateExists = await menuItemExists(name, itemId);
   if (
     !Number.isInteger(itemId) ||
     !validText(name, 2, 80) ||
@@ -836,35 +861,35 @@ app.put("/api/staff/menu/:id", (request, response) => {
     !validImageUrl(imageUrl) ||
     typeof badge !== "string" ||
     badge.length > 40 ||
-    menuItemExists(name, itemId)
+    duplicateExists
   ) {
-    const message = menuItemExists(name, itemId)
+    const message = duplicateExists
       ? "This meal or food is already on the menu. Please use a different item or move the existing one to the correct category."
       : placementError || "Check the dish name, description, category, price and image URL.";
     return response.status(400).json({ error: message });
   }
   const savedBeverageGroup = category === "Drinks" ? beverageGroup : null;
-  const result = db.prepare(`
+  const result = await db.run(`
     UPDATE menu_items
     SET name = ?, description = ?, category = ?, subcategory = ?, price_pesewas = ?, image_url = ?, badge = ?, beverage_group = ?
     WHERE id = ?
-  `).run(name.trim(), description.trim(), category, subcategory.trim(), Math.round(price * 100), imageUrl, badge.trim() || null, savedBeverageGroup, itemId);
+  `, [cleanMenuItemName(name), description.trim(), category, subcategory.trim(), Math.round(price * 100), imageUrl, badge.trim() || null, savedBeverageGroup, itemId]);
   if (result.changes === 0) return response.status(404).json({ error: "Menu item not found." });
-  return response.json(staffMenuItem(db.prepare("SELECT * FROM menu_items WHERE id = ?").get(itemId)));
+  return response.json(staffMenuItem(await db.get("SELECT * FROM menu_items WHERE id = ?", [itemId])));
 });
 
-app.patch("/api/staff/menu/:id", (request, response) => {
+app.patch("/api/staff/menu/:id", async (request, response) => {
   const itemId = Number(request.params.id);
   const { available } = request.body ?? {};
   if (!Number.isInteger(itemId) || typeof available !== "boolean") {
     return response.status(400).json({ error: "Choose whether the dish is available." });
   }
-  const result = db.prepare("UPDATE menu_items SET available = ? WHERE id = ?").run(available ? 1 : 0, itemId);
+  const result = await db.run("UPDATE menu_items SET available = ? WHERE id = ?", [available, itemId]);
   if (result.changes === 0) return response.status(404).json({ error: "Menu item not found." });
-  return response.json(staffMenuItem(db.prepare("SELECT * FROM menu_items WHERE id = ?").get(itemId)));
+  return response.json(staffMenuItem(await db.get("SELECT * FROM menu_items WHERE id = ?", [itemId])));
 });
 
-app.patch("/api/staff/menu/:id/stock", (request, response) => {
+app.patch("/api/staff/menu/:id/stock", async (request, response) => {
   if (request.user.role !== "manager") return response.status(403).json({ error: "Manager access is required to manage menu stock." });
   const itemId = Number(request.params.id);
   const { stockQuantity, lowStockThreshold } = request.body ?? {};
@@ -877,24 +902,24 @@ app.patch("/api/staff/menu/:id/stock", (request, response) => {
   ) {
     return response.status(400).json({ error: "Enter a stock quantity (or leave it untracked) and a valid low-stock threshold." });
   }
-  const result = db.prepare(`
+  const result = await db.run(`
     UPDATE menu_items SET stock_quantity = ?, low_stock_threshold = ? WHERE id = ?
-  `).run(stockQuantity, lowStockThreshold, itemId);
+  `, [stockQuantity, lowStockThreshold, itemId]);
   if (result.changes === 0) return response.status(404).json({ error: "Menu item not found." });
-  return response.json(staffMenuItem(db.prepare("SELECT * FROM menu_items WHERE id = ?").get(itemId)));
+  return response.json(staffMenuItem(await db.get("SELECT * FROM menu_items WHERE id = ?", [itemId])));
 });
 
-app.get("/api/staff/orders", (_request, response) => response.json(readOrders()));
+app.get("/api/staff/orders", async (_request, response) => response.json(await readOrders()));
 
-app.patch("/api/staff/orders/:id", (request, response) => {
+app.patch("/api/staff/orders/:id", async (request, response) => {
   const orderId = Number(request.params.id);
   const { status } = request.body ?? {};
   if (!Number.isInteger(orderId) || !orderStatuses.includes(status)) {
     return response.status(400).json({ error: "Choose a valid order status." });
   }
-  const result = db.prepare("UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(status, orderId);
+  const result = await db.run("UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [status, orderId]);
   if (result.changes === 0) return response.status(404).json({ error: "Order not found." });
-  return response.json(readOrders().find((order) => order.id === orderId));
+  return response.json((await readOrders()).find((order) => order.id === orderId));
 });
 
 app.use("/api", (_request, response) => response.status(404).json({ error: "API route not found." }));

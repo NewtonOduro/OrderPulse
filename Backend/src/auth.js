@@ -29,14 +29,14 @@ export function safeUser(user) {
   };
 }
 
-export function setSession(response, userId) {
+export async function setSession(response, userId) {
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + sessionLifetimeMs).toISOString();
-  db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)").run(
+  await db.run("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)", [
     hashToken(token),
     userId,
     expiresAt,
-  );
+  ]);
   response.cookie(sessionCookie, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
@@ -46,9 +46,9 @@ export function setSession(response, userId) {
   });
 }
 
-export function clearSession(request, response) {
+export async function clearSession(request, response) {
   const token = readSessionToken(request);
-  if (token) db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(hashToken(token));
+  if (token) await db.run("DELETE FROM sessions WHERE token_hash = ?", [hashToken(token)]);
   response.clearCookie(sessionCookie, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
@@ -57,16 +57,16 @@ export function clearSession(request, response) {
   });
 }
 
-export function requireUser(request, response, next) {
+export async function requireUser(request, response, next) {
   const token = readSessionToken(request);
   if (!token) return response.status(401).json({ error: "Sign in to continue." });
-  const user = db.prepare(`
+  const user = await db.get(`
     SELECT u.id, u.name, u.email, u.phone, u.role, u.active
     FROM sessions s JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > ?
-  `).get(hashToken(token), new Date().toISOString());
+  `, [hashToken(token), new Date().toISOString()]);
   if (!user || !user.active) {
-    db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(hashToken(token));
+    await db.run("DELETE FROM sessions WHERE token_hash = ?", [hashToken(token)]);
     return response.status(401).json({ error: "Your session has expired. Sign in again." });
   }
   request.user = safeUser(user);
@@ -105,8 +105,13 @@ const actionLabel = (method, resource) => {
 
 export function auditStaffActivity(request, response, next) {
   if (!["POST", "PUT", "PATCH", "DELETE"].includes(request.method)) return next();
-  response.on("finish", () => {
-    if (response.statusCode < 200 || response.statusCode >= 300 || !request.user) return;
+  const endResponse = response.end;
+  let auditStarted = false;
+  response.end = function (...args) {
+    if (auditStarted || response.statusCode < 200 || response.statusCode >= 300 || !request.user) {
+      return endResponse.apply(this, args);
+    }
+    auditStarted = true;
     const segments = request.originalUrl.split("?")[0].split("/").filter(Boolean);
     const apiIndex = segments.indexOf("api");
     const scope = segments[apiIndex + 1];
@@ -121,10 +126,10 @@ export function auditStaffActivity(request, response, next) {
       Object.hasOwn(body, "stockQuantity") ? `Stock: ${body.stockQuantity === null ? "untracked" : body.stockQuantity}` : null,
       Number.isInteger(body.lowStockThreshold) ? `Low-stock alert: ${body.lowStockThreshold}` : null,
     ].filter(Boolean).join(" · ");
-    db.prepare(`
+    db.run(`
       INSERT INTO activity_logs (user_id, actor_name, actor_email, action, entity, entity_id, details)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       request.user.id,
       request.user.name,
       request.user.email,
@@ -132,7 +137,13 @@ export function auditStaffActivity(request, response, next) {
       resource,
       entityId,
       details,
-    );
-  });
+    ])
+      .then(() => endResponse.apply(this, args))
+      .catch((error) => {
+        console.error("Failed to record staff activity:", error);
+        endResponse.apply(this, args);
+      });
+    return this;
+  };
   next();
 }

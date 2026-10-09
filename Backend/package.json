@@ -7,14 +7,18 @@
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "create-manager": "node src/create-manager.js",
+    "import-menu-data": "node scripts/import-menu-data.js",
     "test": "node --test"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
-    "better-sqlite3": "^12.2.0",
     "dotenv": "^16.6.1",
     "express": "^5.1.0",
     "express-rate-limit": "^8.7.1",
-    "nodemailer": "^10.0.14"
+    "nodemailer": "^10.0.14",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "pg-mem": "^3.0.14"
   }
 }
