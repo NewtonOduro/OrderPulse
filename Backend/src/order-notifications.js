@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 
+const resendEndpoint = "https://api.resend.com/emails";
 const ghanaCedis = new Intl.NumberFormat("en-GH", { style: "currency", currency: "GHS" });
 const formatMoney = (amount) => ghanaCedis.format(amount).replace("GHS", "GH₵");
 const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({
@@ -18,17 +19,67 @@ function configurationStatus(values, required, label) {
 }
 
 async function sendEmail({ to, subject, text, html, reference, replyTo, attachments }) {
+  if (typeof to !== "string" || !to.trim()) {
+    return { status: "no_recipient", message: "No email address is available for this notification." };
+  }
+
+  const from = process.env.EMAIL_FROM || process.env.SMTP_FROM;
+  if (process.env.RESEND_API_KEY) {
+    if (!from) {
+      const result = { status: "failed", message: "EMAIL_FROM must be set to a verified sender address." };
+      console.error(`Email delivery unavailable for ${reference}: ${result.message}`);
+      return result;
+    }
+    try {
+      const response = await fetch(resendEndpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        signal: AbortSignal.timeout(15000),
+        body: JSON.stringify({
+          from,
+          to: [to],
+          subject,
+          text,
+          html,
+          ...(replyTo ? { reply_to: replyTo } : {}),
+          ...(attachments ? {
+            attachments: attachments.map((attachment) => ({
+              filename: attachment.filename,
+              ...(attachment.contentType ? { content_type: attachment.contentType } : {}),
+              content: Buffer.isBuffer(attachment.content)
+                ? attachment.content.toString("base64")
+                : Buffer.from(attachment.content).toString("base64"),
+            })),
+          } : {}),
+        }),
+      });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        const detail = typeof errorBody.message === "string" ? errorBody.message : `HTTP ${response.status}`;
+        console.error(`Email delivery failed for ${reference} via Resend: ${detail}`);
+        return { status: "failed", message: "Email could not be sent. Check the Resend settings and server logs." };
+      }
+      return { status: "sent", message: "Email sent." };
+    } catch (error) {
+      console.error(`Email delivery failed for ${reference} via Resend:`, error.message);
+      return { status: "failed", message: "Email could not be sent. Check the Resend settings and server logs." };
+    }
+  }
+
   const config = {
     SMTP_HOST: process.env.SMTP_HOST,
     SMTP_PORT: process.env.SMTP_PORT,
     SMTP_USER: process.env.SMTP_USER,
     SMTP_PASS: process.env.SMTP_PASS,
-    SMTP_FROM: process.env.SMTP_FROM,
+    SMTP_FROM: from,
   };
   const notReady = configurationStatus(config, Object.keys(config), "Email");
-  if (notReady) return notReady;
-  if (typeof to !== "string" || !to.trim()) {
-    return { status: "no_recipient", message: "No email address is available for this notification." };
+  if (notReady) {
+    console.error(`Email delivery unavailable for ${reference}: ${notReady.message}`);
+    return notReady;
   }
 
   try {
@@ -46,7 +97,7 @@ async function sendEmail({ to, subject, text, html, reference, replyTo, attachme
       socketTimeout: 15000,
     });
     await transporter.sendMail({
-      from: config.SMTP_FROM,
+      from,
       to,
       subject,
       text,
