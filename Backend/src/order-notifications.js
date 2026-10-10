@@ -1,6 +1,11 @@
 import nodemailer from "nodemailer";
 
 const resendEndpoint = "https://api.resend.com/emails";
+const paymentInstructions = {
+  method: "MoMo",
+  number: "0545567500",
+  accountName: "Collins Oduro",
+};
 const ghanaCedis = new Intl.NumberFormat("en-GH", { style: "currency", currency: "GHS" });
 const formatMoney = (amount) => ghanaCedis.format(amount).replace("GHS", "GH₵");
 const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({
@@ -173,6 +178,26 @@ export async function sendPasswordResetEmail({ email, name, token }) {
   });
 }
 
+export async function sendPaymentConfirmationEmail({ email, customerName, orderNumber, total }) {
+  const formattedTotal = formatMoney(total);
+  const text = [
+    `Hello ${customerName},`,
+    "",
+    `Payment for order ${orderNumber} has been confirmed.`,
+    `Amount confirmed: ${formattedTotal}`,
+    "The restaurant team can now begin preparing your order.",
+    "",
+    "Thank you for choosing OrderPulse.",
+  ].join("\n");
+  return sendEmail({
+    to: email,
+    subject: `Payment confirmed for OrderPulse order ${orderNumber}`,
+    text,
+    html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(customerName)},</p><p>Payment for order <strong>${escapeHtml(orderNumber)}</strong> has been confirmed.</p><p>Amount confirmed: <strong>${formattedTotal}</strong></p><p>The restaurant team can now begin preparing your order.</p><p>Thank you for choosing OrderPulse.</p></div>`,
+    reference: `payment confirmation for order ${orderNumber}`,
+  });
+}
+
 export async function sendOrderNotifications(order) {
   const lines = [
     `Hello ${order.customerName},`,
@@ -184,6 +209,10 @@ export async function sendOrderNotifications(order) {
     `Total: ${formatMoney(order.total)}`,
     `Status: ${order.status}`,
     "",
+    "MoMo payment:",
+    `Send ${formatMoney(order.total)} to ${paymentInstructions.number} (${paymentInstructions.accountName}).`,
+    `Use order number ${order.orderNumber} as the payment reference. Your order stays pending until staff confirm receipt.`,
+    "",
     "Thank you for choosing OrderPulse.",
   ];
   const htmlItems = order.items.map((item) =>
@@ -194,7 +223,7 @@ export async function sendOrderNotifications(order) {
       to: order.customerEmail,
       subject: `OrderPulse order ${order.orderNumber}`,
       text: lines.join("\n"),
-      html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(order.customerName)},</p><p>We received order <strong>${escapeHtml(order.orderNumber)}</strong> (${order.orderType === "dine-in" ? "Dine in" : "Pickup"}).</p><ul>${htmlItems}</ul><p><strong>Total: ${formatMoney(order.total)}</strong></p><p>Status: ${escapeHtml(order.status)}</p><p>Thank you for choosing OrderPulse.</p></div>`,
+      html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(order.customerName)},</p><p>We received order <strong>${escapeHtml(order.orderNumber)}</strong> (${order.orderType === "dine-in" ? "Dine in" : "Pickup"}).</p><ul>${htmlItems}</ul><p><strong>Total: ${formatMoney(order.total)}</strong></p><p>Status: ${escapeHtml(order.status)}</p><h2>Pay by MoMo</h2><p>Send <strong>${formatMoney(order.total)}</strong> to <strong>${paymentInstructions.number}</strong> (<strong>${escapeHtml(paymentInstructions.accountName)}</strong>). Use order number <strong>${escapeHtml(order.orderNumber)}</strong> as the payment reference. Your order stays pending until staff confirm receipt.</p><p>Thank you for choosing OrderPulse.</p></div>`,
       reference: `order ${order.orderNumber}`,
     }),
     sendStaffEmail({
@@ -209,6 +238,9 @@ export async function sendOrderNotifications(order) {
         ...order.items.map((item) => `${item.quantity} × ${item.name} — ${formatMoney(item.unitPrice * item.quantity)}`),
         "",
         `Total: ${formatMoney(order.total)}`,
+        "",
+        `Payment: MoMo ${paymentInstructions.number} (${paymentInstructions.accountName})`,
+        `Payment status: ${order.paymentStatus || "pending"}`,
       ].join("\n"),
       html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>New restaurant order</h1><p><strong>Order:</strong> ${escapeHtml(order.orderNumber)} (${order.orderType === "dine-in" ? "Dine in" : "Pickup"})</p><p><strong>Customer:</strong> ${escapeHtml(order.customerName)}<br><strong>Email:</strong> ${escapeHtml(order.customerEmail)}<br><strong>Phone:</strong> ${escapeHtml(order.phone)}</p><ul>${htmlItems}</ul><p><strong>Total: ${formatMoney(order.total)}</strong></p></div>`,
       reference: `staff notification for order ${order.orderNumber}`,

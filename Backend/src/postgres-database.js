@@ -97,6 +97,7 @@ const schema = `
     order_type TEXT NOT NULL CHECK (order_type IN ('pickup', 'dine-in')),
     total_pesewas INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'received',
+    payment_status TEXT NOT NULL DEFAULT 'paid',
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
@@ -243,4 +244,5 @@ const pool = await createPool();
 export const db = createDatabaseAdapter(pool);
 await pool.query(schema);
 await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT TRUE");
+await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'paid'");
 if (process.env.PG_SKIP_SEED !== "1") await seedDatabase(db);

@@ -11,6 +11,7 @@ import {
   sendOrderNotifications,
   sendReservationNotifications,
   sendPasswordResetEmail,
+  sendPaymentConfirmationEmail,
   sendVerificationEmail,
 } from "./order-notifications.js";
 import { getAvailableTables, reservationDurationMinutes } from "./reservation-availability.js";
@@ -233,6 +234,11 @@ const jobPositionTitles = [
 ];
 const minimumPasswordLength = 12;
 const maxMenuStock = 100000;
+const paymentInstructions = {
+  method: "MoMo",
+  number: "0545567500",
+  accountName: "Collins Oduro",
+};
 const normalizedPhone = (phone) => phone.replace(/[^\d+]/g, "");
 const utcDayRange = (date) => [
   `${date}T00:00:00.000Z`,
@@ -377,6 +383,7 @@ async function readOrders(database = db) {
     orderType: order.order_type,
     total: order.total_pesewas / 100,
     status: order.status,
+    paymentStatus: order.payment_status,
     createdAt: order.created_at,
     updatedAt: order.updated_at,
     items: (await database.all("SELECT * FROM order_items WHERE order_id = ? ORDER BY id", [order.id])).map((item) => ({
@@ -397,6 +404,7 @@ async function readTrackedOrder(order) {
   return {
     orderNumber: order.order_number,
     status: order.status,
+    paymentStatus: order.payment_status,
     orderType: order.order_type,
     total: order.total_pesewas / 100,
     createdAt: order.created_at,
@@ -406,6 +414,7 @@ async function readTrackedOrder(order) {
       quantity: item.quantity,
       unitPrice: item.unit_price_pesewas / 100,
     })),
+    paymentInstructions,
   };
 }
 
@@ -436,6 +445,8 @@ app.post("/api/order-tracking", orderLimiter, async (request, response) => {
   }
   return response.json(await readTrackedOrder(order));
 });
+
+app.get("/api/payment-instructions", (_request, response) => response.json(paymentInstructions));
 
 app.post("/api/orders", orderLimiter, async (request, response) => {
   const { customerName, customerEmail, phone, orderType, items } = request.body ?? {};
@@ -496,8 +507,8 @@ app.post("/api/orders", orderLimiter, async (request, response) => {
     );
     const orderNumber = `GH-${randomBytes(16).toString("hex").toUpperCase()}`;
     const insertedOrder = await tx.run(`
-      INSERT INTO orders (order_number, customer_name, customer_email, phone, order_type, total_pesewas)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO orders (order_number, customer_name, customer_email, phone, order_type, total_pesewas, status, payment_status)
+      VALUES (?, ?, ?, ?, ?, ?, 'awaiting_payment', 'pending')
     `, [orderNumber, customerName.trim(), customerEmail.trim().toLowerCase(), phone.trim(), orderType, totalPesewas]);
     for (const { item, quantity } of resolvedItems) {
       await tx.run(`
@@ -512,7 +523,9 @@ app.post("/api/orders", orderLimiter, async (request, response) => {
       phone: phone.trim(),
       orderType,
       total: totalPesewas / 100,
-      status: "received",
+      status: "awaiting_payment",
+      paymentStatus: "pending",
+      paymentInstructions,
       createdAt: new Date().toISOString(),
       items: resolvedItems.map(({ item, quantity }) => ({
         name: item.name,
@@ -623,8 +636,8 @@ app.get("/api/manager/summary", async (_request, response) => {
   const [dayStart, nextDayStart] = utcDayRange(new Date().toISOString().slice(0, 10));
   const [orders, sales, tickets, bookings, tables, staff, activity] = await Promise.all([
     db.get("SELECT COUNT(*) AS count FROM orders WHERE created_at >= ? AND created_at < ?", [dayStart, nextDayStart]),
-    db.get("SELECT COALESCE(SUM(total_pesewas), 0) AS total FROM orders WHERE created_at >= ? AND created_at < ? AND status != 'cancelled'", [dayStart, nextDayStart]),
-    db.get("SELECT COUNT(*) AS count FROM orders WHERE status IN ('received', 'preparing', 'ready')"),
+    db.get("SELECT COALESCE(SUM(total_pesewas), 0) AS total FROM orders WHERE created_at >= ? AND created_at < ? AND status != 'cancelled' AND payment_status = 'paid'", [dayStart, nextDayStart]),
+    db.get("SELECT COUNT(*) AS count FROM orders WHERE status IN ('received', 'preparing', 'ready') AND payment_status = 'paid'"),
     db.get("SELECT COUNT(*) AS count FROM bookings WHERE status = 'requested'"),
     db.get("SELECT COUNT(*) AS count FROM restaurant_tables WHERE status = 'occupied'"),
     db.get("SELECT COUNT(*) AS count FROM users WHERE role = 'staff' AND active = TRUE"),
@@ -1017,9 +1030,42 @@ app.patch("/api/staff/orders/:id", async (request, response) => {
   if (!Number.isInteger(orderId) || !orderStatuses.includes(status)) {
     return response.status(400).json({ error: "Choose a valid order status." });
   }
+  const existingOrder = await db.get("SELECT payment_status FROM orders WHERE id = ?", [orderId]);
+  if (!existingOrder) return response.status(404).json({ error: "Order not found." });
+  if (existingOrder.payment_status !== "paid") {
+    return response.status(409).json({ error: "Confirm the MoMo payment before updating order preparation status." });
+  }
   const result = await db.run("UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [status, orderId]);
   if (result.changes === 0) return response.status(404).json({ error: "Order not found." });
   return response.json((await readOrders()).find((order) => order.id === orderId));
+});
+
+app.patch("/api/staff/orders/:id/payment", async (request, response) => {
+  const orderId = Number(request.params.id);
+  if (!Number.isInteger(orderId) || request.body?.paymentStatus !== "paid") {
+    return response.status(400).json({ error: "Confirm that the MoMo payment was received." });
+  }
+  const order = await db.get("SELECT * FROM orders WHERE id = ?", [orderId]);
+  if (!order) return response.status(404).json({ error: "Order not found." });
+  if (order.payment_status === "paid") {
+    return response.status(409).json({ error: "This order's payment has already been confirmed." });
+  }
+  const updated = await db.run(`
+    UPDATE orders
+    SET payment_status = 'paid', status = 'received', updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND payment_status = 'pending'
+  `, [orderId]);
+  if (updated.changes === 0) return response.status(409).json({ error: "Payment status changed. Refresh orders and try again." });
+  const notification = await sendPaymentConfirmationEmail({
+    email: order.customer_email,
+    customerName: order.customer_name,
+    orderNumber: order.order_number,
+    total: order.total_pesewas / 100,
+  });
+  return response.json({
+    ...(await readOrders()).find((item) => item.id === orderId),
+    notification,
+  });
 });
 
 app.use("/api", (_request, response) => response.status(404).json({ error: "API route not found." }));

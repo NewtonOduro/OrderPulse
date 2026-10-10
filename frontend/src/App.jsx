@@ -105,6 +105,11 @@ function money(amount) {
   return ghanaCurrency.format(amount).replace("GHS", "GH₵");
 }
 
+const momoPaymentInstructions = {
+  number: "0545567500",
+  accountName: "Collins Oduro",
+};
+
 function handleMenuImageError(event) {
   event.currentTarget.onerror = null;
   event.currentTarget.src = "/images/red-red.jpg";
@@ -1006,7 +1011,8 @@ function App() {
               </form>
               {trackingError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{trackingError}</p>}
               {trackingOrder && <div className="mt-5 rounded-2xl bg-white p-4" aria-live="polite">
-                <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs text-forest/50">Order {trackingOrder.orderNumber}</p><p className="mt-1 text-sm font-semibold">Current status</p></div><span className={`status-pill status-${trackingOrder.status}`}>{trackingOrder.status}</span></div>
+                <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs text-forest/50">Order {trackingOrder.orderNumber}</p><p className="mt-1 text-sm font-semibold">Current status</p></div><span className={`status-pill status-${trackingOrder.status}`}>{trackingOrder.status === "awaiting_payment" ? "Awaiting payment" : trackingOrder.status}</span></div>
+                <p className="mt-2 text-xs text-forest/55">Payment: {trackingOrder.paymentStatus === "paid" ? "confirmed" : "pending"}</p>
                 <p className="mt-2 text-xs text-forest/55">{trackingOrder.items.map((item) => `${item.quantity} × ${item.name}`).join(" · ")}</p>
                 {!["completed", "cancelled"].includes(trackingOrder.status) && <p className="mt-2 text-[11px] text-leaf">This status refreshes automatically every 15 seconds.</p>}
               </div>}
@@ -1138,12 +1144,20 @@ function App() {
               <div className="mt-3 flex justify-between border-t border-forest/10 pt-3 text-sm font-bold"><span>Order total</span><span>{money(orderReceipt.total)}</span></div>
             </div>
             <p className="text-xs text-forest/60">{orderReceipt.orderType === "dine-in" ? "Dine in" : "Pickup"} · {new Date(orderReceipt.createdAt).toLocaleString("en-GH", { dateStyle: "medium", timeStyle: "short" })}</p>
+            <div className="mt-4 rounded-xl border border-forest/10 bg-white p-4 text-sm">
+              <p className="font-bold">Pay by MoMo · {orderReceipt.paymentStatus === "paid" ? "Payment confirmed" : "Awaiting payment confirmation"}</p>
+              <p className="mt-2">Send <strong>{money(orderReceipt.total)}</strong> to <strong>{momoPaymentInstructions.number}</strong> ({momoPaymentInstructions.accountName}).</p>
+              <p className="mt-1 text-xs text-forest/60">Use order number {orderReceipt.orderNumber} as the payment reference. We’ll begin preparing your order after staff confirm receipt.</p>
+            </div>
           </div>
           <div className="receipt-delivery mt-5 rounded-xl bg-white p-3 text-xs" role="status">
             <p>Email: {orderReceipt.notifications.email.message}</p>
           </div>
           <div className="mt-4 rounded-xl bg-white p-3 text-sm" aria-live="polite">
-            <div className="flex items-center justify-between gap-3"><span className="text-forest/55">Order status</span><span className={`status-pill status-${trackingOrder?.orderNumber === orderReceipt.orderNumber ? trackingOrder.status : orderReceipt.status}`}>{trackingOrder?.orderNumber === orderReceipt.orderNumber ? trackingOrder.status : orderReceipt.status}</span></div>
+            <div className="flex items-center justify-between gap-3"><span className="text-forest/55">Order status</span>{(() => {
+              const status = trackingOrder?.orderNumber === orderReceipt.orderNumber ? trackingOrder.status : orderReceipt.status;
+              return <span className={`status-pill status-${status}`}>{status === "awaiting_payment" ? "Awaiting payment" : status}</span>;
+            })()}</div>
             <p className="mt-2 text-[11px] text-forest/50">Use your order number and checkout phone in Track order to check progress later.</p>
           </div>
           <div className="receipt-actions mt-5 grid grid-cols-2 gap-3"><button type="button" onClick={() => window.print()} className="inline-flex items-center justify-center gap-2 rounded-full border border-forest/15 px-4 py-3 text-sm font-semibold"><Printer size={16} /> Print receipt</button><button type="button" onClick={closeCheckout} className="rounded-full bg-forest px-4 py-3 text-sm font-semibold text-white">Done</button></div>
@@ -1161,7 +1175,7 @@ function App() {
               <h3>How are you enjoying your meal?</h3>
               <label className="field-label checkout-method">Order method<select name="orderType" defaultValue="pickup"><option value="pickup">Pickup · I'll collect my order</option><option value="dine-in">Dine in · I'll eat at the restaurant</option></select><ChevronDown size={14} className="pointer-events-none absolute bottom-4 right-4 text-forest/40" /></label>
             </section>
-            <section className="checkout-section checkout-payment"><span className="checkout-payment-icon"><ShoppingBag size={18} /></span><div><h3>Payment</h3><p>Payment is handled at the restaurant. No online charge is taken.</p></div></section>
+            <section className="checkout-section checkout-payment"><span className="checkout-payment-icon"><ShoppingBag size={18} /></span><div><h3>Pay by Mobile Money</h3><p>Send <strong>{money(subtotal)}</strong> to <strong>{momoPaymentInstructions.number}</strong> in the name of <strong>{momoPaymentInstructions.accountName}</strong>. Use your order number as the payment reference after placing the order. Staff will confirm payment before preparation begins.</p></div></section>
             <section className="checkout-section checkout-contact">
               <h3>Your contact details</h3>
               <label className="field-label">Your name<input required name="customerName" minLength="2" maxLength="80" autoComplete="name" placeholder="e.g. Ama Mensah" /></label>
@@ -1170,7 +1184,7 @@ function App() {
             </section>
             <button disabled={busy || cart.length === 0} className="checkout-submit">{busy ? "Placing your order…" : `Place order · ${money(subtotal)}`}</button>
             {orderMessage && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{orderMessage}</p>}
-            <p className="checkout-footnote">We'll email your order confirmation. Use your phone number with the order number to track progress.</p>
+            <p className="checkout-footnote">Your order stays pending until staff confirm your MoMo payment. We'll email your order confirmation. Use your phone number with the order number to track payment and preparation status.</p>
           </div>
         </form>}
       </div>}

@@ -793,7 +793,9 @@ a {
 }
 
 .status-received,
-.status-requested {
+.status-requested,
+.status-pending,
+.status-awaiting_payment {
   background: #fff4dc;
   color: #94660e;
 }
@@ -1273,6 +1275,20 @@ a {
 
 .order-card-bottom .staff-select-label {
   margin-left: auto;
+}
+
+.order-payment-review {
+  display: grid;
+  flex: 1;
+  justify-items: start;
+  gap: 9px;
+}
+
+.order-payment-review p {
+  margin: 0;
+  color: rgb(20 37 29 / 66%);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .kitchen-board {

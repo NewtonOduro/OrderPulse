@@ -87,6 +87,13 @@ test("serves the production frontend and client routes when the frontend is buil
 });
 
 test("orders are validated and persisted with a cedi total", async () => {
+  const instructionsResponse = await fetch(`${baseUrl}/api/payment-instructions`);
+  assert.equal(instructionsResponse.status, 200);
+  assert.deepEqual(await instructionsResponse.json(), {
+    method: "MoMo",
+    number: "0545567500",
+    accountName: "Collins Oduro",
+  });
   const [firstItem] = await (await fetch(`${baseUrl}/api/menu`)).json();
   const response = await fetch(`${baseUrl}/api/orders`, {
     method: "POST",
@@ -105,6 +112,13 @@ test("orders are validated and persisted with a cedi total", async () => {
   assert.equal(result.total, firstItem.price * 2);
   assert.equal(result.customerEmail, "ama@example.com");
   assert.equal(result.items[0].name, firstItem.name);
+  assert.equal(result.status, "awaiting_payment");
+  assert.equal(result.paymentStatus, "pending");
+  assert.deepEqual(result.paymentInstructions, {
+    method: "MoMo",
+    number: "0545567500",
+    accountName: "Collins Oduro",
+  });
   assert.equal(result.notifications.email.status, "not_configured");
   assert.equal(result.notifications.staffEmail.status, "no_recipient");
 
@@ -117,12 +131,48 @@ test("orders are validated and persisted with a cedi total", async () => {
   assert.equal((await lookup("0200000000")).status, 404);
   const tracked = await lookup("024 123-4567");
   assert.equal(tracked.status, 200);
-  assert.equal((await tracked.json()).status, "received");
+  const trackedBeforePayment = await tracked.json();
+  assert.equal(trackedBeforePayment.status, "awaiting_payment");
+  assert.equal(trackedBeforePayment.paymentStatus, "pending");
+  assert.deepEqual(trackedBeforePayment.paymentInstructions, result.paymentInstructions);
   const staffOrders = await (await fetch(`${baseUrl}/api/staff/orders`, {
     headers: { cookie: managerCookie },
   })).json();
   const trackedOrder = staffOrders.find((order) => order.orderNumber === result.orderNumber);
   assert.ok(trackedOrder);
+  assert.equal(trackedOrder.paymentStatus, "pending");
+  const pendingSalesSummary = await fetch(`${baseUrl}/api/manager/summary`, {
+    headers: { cookie: managerCookie },
+  });
+  assert.equal((await pendingSalesSummary.json()).salesToday, 0);
+
+  const prematurePreparation = await fetch(`${baseUrl}/api/staff/orders/${trackedOrder.id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: managerCookie },
+    body: JSON.stringify({ status: "preparing" }),
+  });
+  assert.equal(prematurePreparation.status, 409);
+
+  const paymentConfirmation = await fetch(`${baseUrl}/api/staff/orders/${trackedOrder.id}/payment`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: managerCookie },
+    body: JSON.stringify({ paymentStatus: "paid" }),
+  });
+  const paidOrder = await paymentConfirmation.json();
+  assert.equal(paymentConfirmation.status, 200);
+  assert.equal(paidOrder.paymentStatus, "paid");
+  assert.equal(paidOrder.status, "received");
+  assert.equal(paidOrder.notification.status, "not_configured");
+  const confirmedSalesSummary = await fetch(`${baseUrl}/api/manager/summary`, {
+    headers: { cookie: managerCookie },
+  });
+  assert.equal((await confirmedSalesSummary.json()).salesToday, result.total);
+  const duplicatePaymentConfirmation = await fetch(`${baseUrl}/api/staff/orders/${trackedOrder.id}/payment`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: managerCookie },
+    body: JSON.stringify({ paymentStatus: "paid" }),
+  });
+  assert.equal(duplicatePaymentConfirmation.status, 409);
 
   for (const status of ["preparing", "ready", "completed"]) {
     const update = await fetch(`${baseUrl}/api/staff/orders/${trackedOrder.id}`, {
@@ -132,7 +182,9 @@ test("orders are validated and persisted with a cedi total", async () => {
     });
     assert.equal(update.status, 200);
     const refreshed = await lookup("0241234567");
-    assert.equal((await refreshed.json()).status, status);
+    const refreshedOrder = await refreshed.json();
+    assert.equal(refreshedOrder.status, status);
+    assert.equal(refreshedOrder.paymentStatus, "paid");
   }
 });
 
