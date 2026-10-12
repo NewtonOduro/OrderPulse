@@ -119,6 +119,19 @@ test("serves the production frontend and client routes when the frontend is buil
   assert.equal(menu.status, 200);
   assert.equal(await menu.text(), homeHtml);
 
+  const [manifestResponse, workerResponse, iconResponse] = await Promise.all([
+    fetch(`${baseUrl}/manifest.webmanifest`),
+    fetch(`${baseUrl}/service-worker.js`),
+    fetch(`${baseUrl}/icons/orderpulse-192.svg`),
+  ]);
+  assert.equal(manifestResponse.status, 200);
+  const manifest = await manifestResponse.json();
+  assert.equal(manifest.display, "standalone");
+  assert.ok(manifest.icons.some((icon) => icon.sizes === "192x192"));
+  assert.equal(workerResponse.status, 200);
+  assert.match(await workerResponse.text(), /url\.pathname\.startsWith\("\/api\/"\)/);
+  assert.equal(iconResponse.status, 200);
+
   const unknownApi = await fetch(`${baseUrl}/api/unknown`);
   assert.doesNotMatch(unknownApi.headers.get("content-type") || "", /text\/html/);
 });
@@ -227,7 +240,113 @@ test("orders are validated and persisted with a cedi total", async () => {
     const refreshedOrder = await refreshed.json();
     assert.equal(refreshedOrder.status, status);
     assert.equal(refreshedOrder.paymentStatus, "paid");
+    assert.equal(refreshedOrder.feedbackEligible, status === "completed");
   }
+
+  const feedbackPayload = {
+    orderNumber: result.orderNumber,
+    phone: "0241234567",
+    rating: 5,
+    comment: "Fresh, delicious, and ready on time.",
+  };
+  const unauthorizedFeedback = await fetch(`${baseUrl}/api/order-feedback`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...feedbackPayload, phone: "0200000000" }),
+  });
+  assert.equal(unauthorizedFeedback.status, 404);
+  const invalidFeedback = await fetch(`${baseUrl}/api/order-feedback`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ...feedbackPayload, rating: 6 }),
+  });
+  assert.equal(invalidFeedback.status, 400);
+  const submittedFeedback = await fetch(`${baseUrl}/api/order-feedback`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(feedbackPayload),
+  });
+  assert.equal(submittedFeedback.status, 201);
+  assert.equal((await submittedFeedback.json()).feedback.rating, 5);
+  const duplicateFeedback = await fetch(`${baseUrl}/api/order-feedback`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(feedbackPayload),
+  });
+  assert.equal(duplicateFeedback.status, 409);
+  const savedFeedback = await lookup("0241234567");
+  const trackedWithFeedback = await savedFeedback.json();
+  assert.equal(trackedWithFeedback.feedbackEligible, false);
+  assert.equal(trackedWithFeedback.feedback.comment, feedbackPayload.comment);
+  const feedbackDashboard = await fetch(`${baseUrl}/api/staff/feedback`, { headers: { cookie: managerCookie } });
+  assert.equal(feedbackDashboard.status, 200);
+  const feedbackData = await feedbackDashboard.json();
+  assert.ok(feedbackData.count >= 1);
+  assert.ok(feedbackData.averageRating >= 1 && feedbackData.averageRating <= 5);
+  assert.ok(feedbackData.feedback.some((entry) => entry.orderNumber === result.orderNumber));
+});
+
+test("managers publish staff announcements and staff can mark them as read", async () => {
+  const announcementPayload = {
+    category: "employee_of_month",
+    title: "Employee of the month",
+    body: "Congratulations to the kitchen team for excellent service.",
+  };
+  const anonymousRead = await fetch(`${baseUrl}/api/staff/announcements`);
+  assert.equal(anonymousRead.status, 401);
+  const invalidAnnouncement = await fetch(`${baseUrl}/api/staff/announcements`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: managerCookie },
+    body: JSON.stringify({ ...announcementPayload, category: "unknown" }),
+  });
+  assert.equal(invalidAnnouncement.status, 400);
+  const published = await fetch(`${baseUrl}/api/staff/announcements`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: managerCookie },
+    body: JSON.stringify(announcementPayload),
+  });
+  assert.equal(published.status, 201);
+  const announcement = await published.json();
+  assert.equal(announcement.category, announcementPayload.category);
+  assert.equal(announcement.authorName, "Test Manager");
+
+  const staffPassword = "test-staff-password-123";
+  const staffHash = await bcrypt.hash(staffPassword, 4);
+  await db.run(
+    "INSERT INTO users (name, email, password_hash, role, email_verified) VALUES (?, ?, ?, 'staff', TRUE)",
+    ["Test Staff", "staff-announcements@test.example", staffHash],
+  );
+  const login = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "staff-announcements@test.example", password: staffPassword }),
+  });
+  assert.equal(login.status, 200);
+  const staffCookie = sessionCookie(login);
+  const staffFeed = await fetch(`${baseUrl}/api/staff/announcements`, { headers: { cookie: staffCookie } });
+  assert.equal(staffFeed.status, 200);
+  const feed = await staffFeed.json();
+  const unread = feed.find((entry) => entry.id === announcement.id);
+  assert.ok(unread);
+  assert.equal(unread.readAt, null);
+  const forbiddenPublish = await fetch(`${baseUrl}/api/staff/announcements`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: staffCookie },
+    body: JSON.stringify({ category: "promotion", title: "Promotion", body: "Congratulations." }),
+  });
+  assert.equal(forbiddenPublish.status, 403);
+  const markRead = await fetch(`${baseUrl}/api/staff/announcements/${announcement.id}/read`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: staffCookie },
+  });
+  assert.equal(markRead.status, 200);
+  const alreadyRead = await fetch(`${baseUrl}/api/staff/announcements/${announcement.id}/read`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: staffCookie },
+  });
+  assert.equal(alreadyRead.status, 200);
+  const updatedFeed = await (await fetch(`${baseUrl}/api/staff/announcements`, { headers: { cookie: staffCookie } })).json();
+  assert.ok(updatedFeed.find((entry) => entry.id === announcement.id).readAt);
 });
 
 test("Paystack webhook requires a valid signature and verifies payment before updating an order", async () => {

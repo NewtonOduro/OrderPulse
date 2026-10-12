@@ -15,6 +15,7 @@ import {
   Printer,
   ShoppingBag,
   Sparkles,
+  Star,
   X,
 } from "lucide-react";
 import AuthDialog from "./AuthDialog.jsx";
@@ -154,6 +155,14 @@ function App() {
   const [trackingPhone, setTrackingPhone] = useState("");
   const [trackingError, setTrackingError] = useState("");
   const [trackingBusy, setTrackingBusy] = useState(false);
+  const [feedbackRating, setFeedbackRating] = useState(0);
+  const [feedbackComment, setFeedbackComment] = useState("");
+  const [feedbackMessage, setFeedbackMessage] = useState("");
+  const [feedbackBusy, setFeedbackBusy] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [iosInstallAvailable, setIosInstallAvailable] = useState(false);
+  const [installHelp, setInstallHelp] = useState("");
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine);
   const [applicationMessage, setApplicationMessage] = useState("");
   const [applicationError, setApplicationError] = useState("");
   const [applicationBusy, setApplicationBusy] = useState(false);
@@ -174,6 +183,38 @@ function App() {
     };
     window.addEventListener("popstate", syncRoute);
     return () => window.removeEventListener("popstate", syncRoute);
+  }, []);
+
+  useEffect(() => {
+    const onOnline = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    const onInstallPrompt = (event) => {
+      event.preventDefault();
+      setInstallPrompt(event);
+    };
+    const onInstalled = () => {
+      setInstallPrompt(null);
+    };
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("beforeinstallprompt", onInstallPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    const userAgent = window.navigator.userAgent.toLowerCase();
+    const isIos = /iphone|ipad|ipod/.test(userAgent) ||
+      (window.navigator.platform === "MacIntel" && window.navigator.maxTouchPoints > 1);
+    const isStandalone = window.matchMedia("(display-mode: standalone)").matches ||
+      window.navigator.standalone === true;
+    setIosInstallAvailable(isIos && !isStandalone);
+    if ("serviceWorker" in navigator && import.meta.env.PROD) {
+      navigator.serviceWorker.register("/service-worker.js")
+        .catch((error) => console.error("OrderPulse offline support could not be enabled.", error));
+    }
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("beforeinstallprompt", onInstallPrompt);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
   }, []);
 
   useEffect(() => {
@@ -745,11 +786,43 @@ function App() {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "We couldn't find that order.");
       setTrackingOrder({ ...result, phone: trackingPhone.trim() });
+      setFeedbackRating(result.feedback?.rating || 0);
+      setFeedbackComment(result.feedback?.comment || "");
+      setFeedbackMessage("");
     } catch (error) {
       setTrackingError(error.message);
       setTrackingOrder(null);
     } finally {
       setTrackingBusy(false);
+    }
+  }
+
+  async function submitOrderFeedback(event) {
+    event.preventDefault();
+    if (!trackingOrder || !feedbackRating) return;
+    setFeedbackBusy(true);
+    setTrackingError("");
+    try {
+      const response = await fetch("/api/order-feedback", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          orderNumber: trackingOrder.orderNumber,
+          phone: trackingOrder.phone,
+          rating: feedbackRating,
+          comment: feedbackComment,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "We couldn't save your feedback.");
+      setTrackingOrder((current) => current
+        ? { ...current, feedback: result.feedback, feedbackEligible: false }
+        : current);
+      setFeedbackMessage("Thanks for sharing your feedback with our team.");
+    } catch (error) {
+      setTrackingError(error.message);
+    } finally {
+      setFeedbackBusy(false);
     }
   }
 
@@ -822,6 +895,21 @@ function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  async function installApp() {
+    setInstallHelp("");
+    if (!installPrompt) {
+      setInstallHelp("In Safari, tap Share, then choose Add to Home Screen.");
+      return;
+    }
+    try {
+      await installPrompt.prompt();
+      const result = await installPrompt.userChoice;
+      if (result.outcome === "accepted") setInstallPrompt(null);
+    } catch (error) {
+      setMenuError(`The install prompt could not be opened: ${error.message}`);
+    }
+  }
+
   function closeCheckout() {
     setCheckoutOpen(false);
     setOrderMessage("");
@@ -864,10 +952,11 @@ function App() {
     </div>
   );
 
-  if (staffMode) return <StaffDashboard onExit={() => setStaffMode(false)} />;
+  if (staffMode) return <StaffDashboard onExit={() => setStaffMode(false)} isOnline={isOnline} />;
 
   return (
     <div className="orderpulse-app-background min-h-screen text-forest">
+      {!isOnline && <div className="app-connectivity-banner" role="status">You’re offline. Previously loaded pages may still be available; ordering and payments need an internet connection.</div>}
       <div className="landing-topline">
         FRESH FROM OUR KITCHEN <span>✳</span> AHODWO, KUMASI
       </div>
@@ -883,7 +972,9 @@ function App() {
           <a className="transition hover:text-leaf" href="/about" onClick={(event) => navigate(event, "/about")}>Our story</a>
           <a className="transition hover:text-leaf" href={sectionHref("reserve")} onClick={(event) => navigate(event, sectionHref("reserve"))}>Find a table</a>
         </nav>
-        <div className="flex items-center gap-2">
+        <div className="relative flex items-center gap-2">
+          {(installPrompt || iosInstallAvailable) && <button className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full border border-forest/10 px-3 text-xs font-semibold text-forest/70 hover:border-leaf hover:text-leaf" onClick={installApp}><Download size={15} /><span className="hidden sm:inline">{iosInstallAvailable && !installPrompt ? "Add to Home Screen" : "Install app"}</span></button>}
+          {installHelp && <div className="install-help-popover" role="status">{installHelp}<button type="button" onClick={() => setInstallHelp("")} aria-label="Dismiss install instructions"><X size={14} /></button></div>}
           <button aria-label="Staff workspace" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2 py-2.5 text-sm font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-4" onClick={() => setStaffMode(true)}><ChefHat size={16} /><span className="hidden sm:inline">Staff</span></button>
           {customerUser ? <div className="landing-account-actions flex items-center gap-1"><span className="hidden max-w-28 truncate text-xs font-semibold text-leaf sm:inline">{customerUser.name.split(" ")[0]}</span><button aria-label="Sign out of your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full border border-forest/10 px-2.5 text-xs font-semibold text-forest/65 hover:border-leaf hover:text-leaf sm:px-3" onClick={signOutCustomer}><CircleUserRound size={16} /><span className="hidden md:inline">Sign out</span></button></div> : <button aria-label="Sign in to your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 py-2.5 text-xs font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-3" onClick={() => { setAuthMode("login"); setAuthOpen(true); }}><CircleUserRound size={16} /><span className="hidden sm:inline">Sign in</span></button>}
           <button
@@ -1070,6 +1161,18 @@ function App() {
                 <p className="mt-2 text-xs text-forest/55">Payment: {trackingOrder.paymentStatus === "paid" ? "confirmed" : "pending"}</p>
                 <p className="mt-2 text-xs text-forest/55">{trackingOrder.items.map((item) => `${item.quantity} × ${item.name}`).join(" · ")}</p>
                 {!["completed", "cancelled"].includes(trackingOrder.status) && <p className="mt-2 text-[11px] text-leaf">This status refreshes automatically every 15 seconds.</p>}
+                {trackingOrder.feedbackEligible && <form className="order-feedback-form" onSubmit={submitOrderFeedback}>
+                  <div><h3>How was your meal?</h3><p>Your feedback helps our team make every visit better.</p></div>
+                  <div className="feedback-rating-picker" role="group" aria-label="Rate your meal from 1 to 5 stars">
+                    {Array.from({ length: 5 }, (_, index) => {
+                      const rating = index + 1;
+                      return <button key={rating} type="button" aria-label={`${rating} ${rating === 1 ? "star" : "stars"}`} aria-pressed={feedbackRating === rating} onClick={() => setFeedbackRating(rating)}><Star size={25} fill={feedbackRating >= rating ? "currentColor" : "none"} /></button>;
+                    })}
+                  </div>
+                  <label className="field-label">Anything you’d like us to know? <span className="text-forest/45">(optional)</span><textarea value={feedbackComment} onChange={(event) => setFeedbackComment(event.target.value)} maxLength={1000} rows={3} placeholder="Tell us what went well or what we could improve." /></label>
+                  <button type="submit" disabled={!feedbackRating || feedbackBusy} className="staff-primary">{feedbackBusy ? "Sending feedback…" : "Send feedback"}</button>
+                </form>}
+                {trackingOrder.feedback && <div className="order-feedback-thanks" role="status"><strong>{feedbackMessage || "Thank you for rating your meal."}</strong><span>{trackingOrder.feedback.rating}/5 stars{trackingOrder.feedback.comment ? ` · “${trackingOrder.feedback.comment}”` : ""}</span></div>}
               </div>}
             </div>
           </div>

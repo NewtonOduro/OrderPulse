@@ -369,6 +369,115 @@ export const updateOrderStatus = async (request, response) => {
   return response.json((await readOrders()).find((order) => order.id === orderId));
 };
 
+export const staffFeedback = async (_request, response) => {
+  const [summary, entries] = await Promise.all([
+    db.get("SELECT COUNT(*) AS count, COALESCE(AVG(rating), 0) AS average_rating FROM order_feedback"),
+    db.all(`
+      SELECT f.id, f.rating, f.comment_text, f.created_at,
+        o.order_number, o.customer_name, o.order_type
+      FROM order_feedback f
+      JOIN orders o ON o.id = f.order_id
+      ORDER BY f.created_at DESC, f.id DESC
+      LIMIT 100
+    `),
+  ]);
+  return response.json({
+    count: Number(summary.count),
+    averageRating: Number(summary.average_rating),
+    feedback: entries.map((entry) => ({
+      id: entry.id,
+      rating: entry.rating,
+      comment: entry.comment_text,
+      createdAt: entry.created_at,
+      orderNumber: entry.order_number,
+      customerName: entry.customer_name,
+      orderType: entry.order_type,
+    })),
+  });
+};
+
+const announcementCategories = ["employee_of_month", "new_employee", "promotion", "general"];
+
+export const staffAnnouncements = async (request, response) => {
+  const announcements = await db.all(`
+    SELECT a.id, a.category, a.title, a.body, a.created_at, u.name AS author_name,
+      r.read_at
+    FROM staff_announcements a
+    LEFT JOIN users u ON u.id = a.author_id
+    LEFT JOIN staff_announcement_reads r ON r.announcement_id = a.id AND r.user_id = ?
+    ORDER BY a.created_at DESC, a.id DESC
+    LIMIT 100
+  `, [request.user.id]);
+  return response.json(announcements.map((announcement) => ({
+    id: announcement.id,
+    category: announcement.category,
+    title: announcement.title,
+    body: announcement.body,
+    authorName: announcement.author_name,
+    createdAt: announcement.created_at,
+    readAt: announcement.read_at,
+  })));
+};
+
+export const createStaffAnnouncement = async (request, response) => {
+  if (request.user.role !== "manager") {
+    return response.status(403).json({ error: "Manager access is required to publish staff announcements." });
+  }
+  const { category, title, body } = request.body ?? {};
+  if (
+    !announcementCategories.includes(category) ||
+    !validText(title, 3, 120) ||
+    !validText(body, 3, 2000)
+  ) {
+    return response.status(400).json({ error: "Choose a valid announcement type and enter a title and message." });
+  }
+  const result = await db.run(
+    "INSERT INTO staff_announcements (category, title, body, author_id) VALUES (?, ?, ?, ?)",
+    [category, title.trim(), body.trim(), request.user.id],
+  );
+  const announcement = await db.get(`
+    SELECT id, category, title, body, created_at
+    FROM staff_announcements
+    WHERE id = ?
+  `, [result.lastInsertRowid]);
+  return response.status(201).json({
+    id: announcement.id,
+    category: announcement.category,
+    title: announcement.title,
+    body: announcement.body,
+    authorName: request.user.name,
+    createdAt: announcement.created_at,
+    readAt: null,
+  });
+};
+
+export const markStaffAnnouncementRead = async (request, response) => {
+  const announcementId = Number(request.params.id);
+  if (!Number.isInteger(announcementId) || announcementId < 1) {
+    return response.status(400).json({ error: "Choose a valid staff announcement." });
+  }
+  const result = await db.transaction(async (tx) => {
+    if (!await tx.get("SELECT id FROM staff_announcements WHERE id = ? FOR UPDATE", [announcementId])) {
+      return { status: 404, error: "Staff announcement not found." };
+    }
+    const existingRead = await tx.get(
+      "SELECT read_at FROM staff_announcement_reads WHERE announcement_id = ? AND user_id = ?",
+      [announcementId, request.user.id],
+    );
+    if (existingRead) return { status: 200, readAt: existingRead.read_at };
+    await tx.run(
+      "INSERT INTO staff_announcement_reads (announcement_id, user_id) VALUES (?, ?)",
+      [announcementId, request.user.id],
+    );
+    const read = await tx.get(
+      "SELECT read_at FROM staff_announcement_reads WHERE announcement_id = ? AND user_id = ?",
+      [announcementId, request.user.id],
+    );
+    return { status: 200, readAt: read.read_at };
+  });
+  if (result.error) return response.status(result.status).json({ error: result.error });
+  return response.json({ id: announcementId, readAt: result.readAt });
+};
 
 
 export const healthCheck = (_request, response) => response.json({ status: "ok" });

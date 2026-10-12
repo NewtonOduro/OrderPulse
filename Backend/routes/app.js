@@ -41,6 +41,13 @@ const orderLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many order requests. Please try again in 15 minutes." },
 });
+const feedbackLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many feedback submissions. Please try again later." },
+});
 const reservationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 15,
@@ -74,6 +81,7 @@ app.post("/api/auth/logout", userController.logout);
 app.get("/api/health", adminController.healthCheck);
 app.get("/api/menu", adminController.publicMenu);
 app.post("/api/order-tracking", orderLimiter, postController.trackOrder);
+app.post("/api/order-feedback", feedbackLimiter, postController.submitOrderFeedback);
 app.post("/api/orders", orderLimiter, postController.createOrder);
 app.post("/api/payments/verify", orderLimiter, postController.verifyPayment);
 app.get("/api/reservation-availability", postController.reservationAvailability);
@@ -102,6 +110,10 @@ app.patch("/api/staff/menu/:id", adminController.setMenuItemAvailability);
 app.patch("/api/staff/menu/:id/stock", adminController.updateMenuStock);
 app.get("/api/staff/orders", adminController.staffOrders);
 app.patch("/api/staff/orders/:id", adminController.updateOrderStatus);
+app.get("/api/staff/feedback", adminController.staffFeedback);
+app.get("/api/staff/announcements", adminController.staffAnnouncements);
+app.post("/api/staff/announcements", adminController.createStaffAnnouncement);
+app.patch("/api/staff/announcements/:id/read", adminController.markStaffAnnouncementRead);
 
 app.use("/api", (_request, response) => response.status(404).json({ error: "API route not found." }));
 app.use(express.static(frontendDist));

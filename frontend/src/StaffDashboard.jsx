@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   Activity,
+  Bell,
   ChefHat,
   ClipboardList,
   Eye,
@@ -12,6 +13,7 @@ import {
   Plus,
   RefreshCw,
   ShieldCheck,
+  Star,
   Utensils,
   UsersRound,
   X,
@@ -25,6 +27,8 @@ const tabs = [
   { id: "menu", label: "Menu", icon: ClipboardList },
   { id: "orders", label: "Orders", icon: ClipboardList },
   { id: "kitchen", label: "Kitchen", icon: ChefHat },
+  { id: "announcements", label: "Updates", icon: Bell },
+  { id: "feedback", label: "Guest feedback", icon: Star },
   { id: "activity", label: "Team activity", icon: Activity, managerOnly: true },
   { id: "applications", label: "Job applications", icon: FileText, managerOnly: true },
   { id: "team", label: "Staff accounts", icon: ShieldCheck, managerOnly: true },
@@ -68,7 +72,7 @@ function StatusPill({ children }) {
   return <span className={`status-pill status-${children}`}>{children}</span>;
 }
 
-function StaffDashboard({ onExit }) {
+function StaffDashboard({ onExit, isOnline }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -83,26 +87,57 @@ function StaffDashboard({ onExit }) {
   const [reservations, setReservations] = useState([]);
   const [menuItems, setMenuItems] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
+  const [feedbackSummary, setFeedbackSummary] = useState({ count: 0, averageRating: 0, feedback: [] });
   const [activities, setActivities] = useState([]);
   const [applications, setApplications] = useState([]);
   const [staffUsers, setStaffUsers] = useState([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [orderAlertsEnabled, setOrderAlertsEnabled] = useState(false);
+  const [newOrderAlert, setNewOrderAlert] = useState(null);
+  const knownOrderStates = useRef(null);
+  const orderAlertsEnabledRef = useRef(false);
 
   const loadData = useCallback(async (role = "staff") => {
-    const [nextSummary, nextTables, nextReservations, nextMenu, nextOrders] = await Promise.all([
+    const [nextSummary, nextTables, nextReservations, nextMenu, nextOrders, nextAnnouncements, nextFeedback] = await Promise.all([
       request("/api/staff/summary"),
       request("/api/staff/tables"),
       request("/api/staff/reservations"),
       request("/api/staff/menu"),
       request("/api/staff/orders"),
+      request("/api/staff/announcements"),
+      request("/api/staff/feedback"),
     ]);
     setSummary(nextSummary);
     setTables(nextTables);
     setReservations(nextReservations);
     setMenuItems(nextMenu);
     setOrders(nextOrders);
+    setAnnouncements(nextAnnouncements);
+    setFeedbackSummary(nextFeedback);
+    const previousStates = knownOrderStates.current;
+    const currentStates = new Map(nextOrders.map((order) => [order.id, order.paymentStatus]));
+    if (previousStates) {
+      const newlyPaidOrders = nextOrders.filter((order) =>
+        order.paymentStatus === "paid" &&
+        order.status === "received" &&
+        (!previousStates.has(order.id) || previousStates.get(order.id) !== "paid"),
+      );
+      if (newlyPaidOrders.length) {
+        setNewOrderAlert({ count: newlyPaidOrders.length, orderNumber: newlyPaidOrders[0].orderNumber });
+        if (orderAlertsEnabledRef.current && "Notification" in window && Notification.permission === "granted") {
+          new Notification(newlyPaidOrders.length === 1 ? "New paid kitchen order" : `${newlyPaidOrders.length} new kitchen orders`, {
+            body: newlyPaidOrders.length === 1
+              ? `${newlyPaidOrders[0].orderNumber} is ready for the kitchen.`
+              : `Newest: ${newlyPaidOrders[0].orderNumber}`,
+            tag: "orderpulse-new-kitchen-order",
+          });
+        }
+      }
+    }
+    knownOrderStates.current = currentStates;
     if (role === "manager") {
       const [nextActivities, nextStaff, nextApplications] = await Promise.all([
         request("/api/manager/activities"),
@@ -113,6 +148,12 @@ function StaffDashboard({ onExit }) {
       setStaffUsers(nextStaff);
       setApplications(nextApplications);
     }
+  }, []);
+
+  useEffect(() => {
+    const enabled = window.localStorage.getItem("orderpulse-staff-order-alerts") === "true";
+    setOrderAlertsEnabled(enabled && "Notification" in window && Notification.permission === "granted");
+    orderAlertsEnabledRef.current = enabled && "Notification" in window && Notification.permission === "granted";
   }, []);
 
   useEffect(() => {
@@ -199,7 +240,36 @@ function StaffDashboard({ onExit }) {
     setActivities([]);
     setApplications([]);
     setStaffUsers([]);
+    setAnnouncements([]);
+    setFeedbackSummary({ count: 0, averageRating: 0, feedback: [] });
+    knownOrderStates.current = null;
+    setNewOrderAlert(null);
     onExit();
+  }
+
+  async function enableIncomingAlerts() {
+    if (!("Notification" in window)) {
+      setError("This browser does not support desktop notifications. The kitchen queue will still refresh every 15 seconds.");
+      return;
+    }
+    const permission = Notification.permission === "default"
+      ? await Notification.requestPermission()
+      : Notification.permission;
+    if (permission !== "granted") {
+      setError("Notifications are blocked by this browser. Allow notifications in browser settings to receive new-order alerts.");
+      return;
+    }
+    orderAlertsEnabledRef.current = true;
+    setOrderAlertsEnabled(true);
+    window.localStorage.setItem("orderpulse-staff-order-alerts", "true");
+    setNotice("New paid-order desktop alerts are enabled on this device.");
+  }
+
+  function disableIncomingAlerts() {
+    orderAlertsEnabledRef.current = false;
+    setOrderAlertsEnabled(false);
+    window.localStorage.removeItem("orderpulse-staff-order-alerts");
+    setNotice("Desktop order alerts are disabled on this device.");
   }
 
   if (!authorized) {
@@ -241,9 +311,10 @@ function StaffDashboard({ onExit }) {
       </aside>
 
       <main className="staff-main">
+        {!isOnline && <div className="app-connectivity-banner" role="status">You’re offline. The kitchen board shows the last loaded orders; updates need an internet connection.</div>}
         <header className="staff-topbar">
           <div><p className="staff-eyebrow">THE GREEN PLATE · {user.role.toUpperCase()} · {user.name}</p><h1>{visibleTabs.find((tab) => tab.id === activeTab)?.label}</h1></div>
-          <div className="staff-top-actions"><span className="staff-live"><i /> Live · refreshes every 15 sec</span><button className="staff-icon-button" onClick={() => runAction(() => loadData(user.role), "Dashboard refreshed.")} aria-label="Refresh dashboard"><RefreshCw size={16} /></button><button className="staff-exit-mobile" onClick={signOut} aria-label="Sign out"><LogOut size={17} /></button></div>
+          <div className="staff-top-actions"><span className="staff-live"><i /> Live · refreshes every 15 sec</span><button className="staff-icon-button staff-notification-button" onClick={() => setActiveTab("announcements")} aria-label={`Staff notifications, ${announcements.filter((item) => !item.readAt).length} unread`}><Bell size={17} />{announcements.some((item) => !item.readAt) && <span className="staff-notification-count">{announcements.filter((item) => !item.readAt).length}</span>}</button><button className="staff-icon-button" onClick={() => runAction(() => loadData(user.role), "Dashboard refreshed.")} aria-label="Refresh dashboard"><RefreshCw size={16} /></button><button className="staff-exit-mobile" onClick={signOut} aria-label="Sign out"><LogOut size={17} /></button></div>
         </header>
         {error && <div role="alert" className="staff-alert staff-alert-wide"><span>{error}</span><button onClick={() => setError("")} aria-label="Dismiss error"><X size={16} /></button></div>}
         {notice && <div role="status" className="staff-notice">{notice}<button onClick={() => setNotice("")} aria-label="Dismiss message"><X size={16} /></button></div>}
@@ -252,7 +323,9 @@ function StaffDashboard({ onExit }) {
         {activeTab === "reservations" && <Reservations reservations={reservations} tables={tables} busy={busy} onAction={runAction} pin={null} />}
         {activeTab === "menu" && <MenuManagement menuItems={menuItems} busy={busy} onAction={runAction} pin={null} manager={user.role === "manager"} />}
         {activeTab === "orders" && <Orders orders={orders} busy={busy} onAction={runAction} pin={null} />}
-        {activeTab === "kitchen" && <Kitchen orders={activeOrders} busy={busy} onAction={runAction} pin={null} />}
+        {activeTab === "kitchen" && <Kitchen orders={activeOrders} busy={busy} onAction={runAction} alertsEnabled={orderAlertsEnabled} newOrderAlert={newOrderAlert} onEnableAlerts={enableIncomingAlerts} onDisableAlerts={disableIncomingAlerts} onDismissAlert={() => setNewOrderAlert(null)} />}
+        {activeTab === "announcements" && <StaffAnnouncements announcements={announcements} manager={user.role === "manager"} busy={busy} onAction={runAction} />}
+        {activeTab === "feedback" && <FeedbackInbox summary={feedbackSummary} />}
         {activeTab === "activity" && user.role === "manager" && <ManagerActivity activities={activities} />}
         {activeTab === "applications" && user.role === "manager" && <JobApplications applications={applications} />}
         {activeTab === "team" && user.role === "manager" && <TeamManagement users={staffUsers} busy={busy} onAction={runAction} />}
@@ -492,21 +565,80 @@ function Orders({ orders, busy, onAction, pin }) {
   </section>;
 }
 
-function Kitchen({ orders, busy, onAction, pin }) {
+function Kitchen({ orders, busy, onAction, alertsEnabled, newOrderAlert, onEnableAlerts, onDisableAlerts, onDismissAlert }) {
   const columns = [
     { status: "received", title: "New", next: "preparing", button: "Start preparing" },
     { status: "preparing", title: "Preparing", next: "ready", button: "Mark ready" },
     { status: "ready", title: "Ready to serve", next: "completed", button: "Complete order" },
   ];
+  const ageLabel = (value) => {
+    const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60_000));
+    if (minutes < 1) return "Just arrived";
+    if (minutes < 60) return `${minutes} min waiting`;
+    return `${Math.floor(minutes / 60)}h ${minutes % 60}m waiting`;
+  };
   return <section className="staff-content">
-    <div className="staff-section-intro"><div><h2>Kitchen display</h2><p>Move each ticket forward as the kitchen works.</p></div><span className="staff-live"><i /> Updates every 15 seconds</span></div>
-    <div className="kitchen-board">{columns.map((column) => {
+    <div className="staff-section-intro"><div><h2>Kitchen display</h2><p>Prioritized paid tickets. Move each order forward as the kitchen works.</p></div><div className="kitchen-header-actions"><span className="staff-live"><i /> Live · 15 sec</span><button type="button" className="staff-secondary" onClick={alertsEnabled ? onDisableAlerts : onEnableAlerts}>{alertsEnabled ? "Turn alerts off" : "Enable new-order alerts"}</button></div></div>
+    {newOrderAlert && <div className="kitchen-new-order-alert" role="status" aria-live="assertive"><div><strong>{newOrderAlert.count === 1 ? "New paid order received" : `${newOrderAlert.count} new paid orders received`}</strong><span>{newOrderAlert.orderNumber} is at the top of the kitchen queue.</span></div><button type="button" onClick={onDismissAlert} aria-label="Dismiss new order alert"><X size={17} /></button></div>}
+    {orders.length === 0 ? <EmptyState>All clear. Paid orders will appear here as soon as payment is confirmed.</EmptyState> : <div className="kitchen-board">{columns.map((column) => {
       const tickets = orders.filter((order) => order.status === column.status);
       return <section className="kitchen-column" key={column.status}><header><h3>{column.title}</h3><span>{tickets.length}</span></header>
-        {tickets.map((order) => <article className="kitchen-ticket" key={order.id}><div className="kitchen-ticket-head"><strong>{order.orderNumber}</strong><span>{order.orderType}</span></div><p className="kitchen-customer">{order.customerName} · {order.phone}</p><ul>{order.items.map((item, index) => <li key={`${order.id}-${index}`}><b>{item.quantity}×</b> {item.name}</li>)}</ul><div className="kitchen-ticket-footer"><span>{money(order.total)}</span><button disabled={busy} className="staff-primary staff-small" onClick={() => onAction(() => request(`/api/staff/orders/${order.id}`, pin, { method: "PATCH", body: JSON.stringify({ status: column.next }) }), `${order.orderNumber} moved to ${column.next}.`)}>{column.button}</button></div></article>)}
+        {tickets.slice().sort((first, second) => Date.parse(first.createdAt) - Date.parse(second.createdAt)).map((order) => <article className={`kitchen-ticket kitchen-ticket-${order.status}`} key={order.id}><div className="kitchen-ticket-head"><strong>{order.orderNumber}</strong><span>{order.orderType}</span></div><div className="kitchen-ticket-meta"><span>{order.customerName} · {order.phone}</span><time dateTime={order.createdAt}>{ageLabel(order.createdAt)}</time></div><ul>{order.items.map((item, index) => <li key={`${order.id}-${index}`}><b>{item.quantity}×</b> {item.name}</li>)}</ul><div className="kitchen-ticket-footer"><span>{money(order.total)}</span><button disabled={busy} className="staff-primary staff-small" onClick={() => onAction(() => request(`/api/staff/orders/${order.id}`, null, { method: "PATCH", body: JSON.stringify({ status: column.next }) }), `${order.orderNumber} moved to ${column.next}.`)}>{column.button}</button></div></article>)}
         {tickets.length === 0 && <EmptyState>Nothing here right now.</EmptyState>}
       </section>;
-    })}</div>
+    })}</div>}
+  </section>;
+}
+
+const announcementLabels = {
+  employee_of_month: "Employee of the month",
+  new_employee: "New team member",
+  promotion: "Promotion",
+  general: "Team update",
+};
+
+function StaffAnnouncements({ announcements, manager, busy, onAction }) {
+  const unread = announcements.filter((announcement) => !announcement.readAt);
+  function publishAnnouncement(event) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const payload = {
+      category: form.get("category"),
+      title: form.get("title"),
+      body: form.get("body"),
+    };
+    onAction(async () => {
+      await request("/api/staff/announcements", null, { method: "POST", body: JSON.stringify(payload) });
+      formElement.reset();
+    }, "Staff update published.");
+  }
+  return <section className="staff-content">
+    <div className="staff-section-intro"><div><h2>Team updates</h2><p>Recognition, new colleagues, promotions, and important team news.</p></div><span className="staff-count">{unread.length} unread</span></div>
+    {manager && <form className="announcement-compose staff-panel" onSubmit={publishAnnouncement}>
+      <div><h3>Share an update</h3><p>Announcements are visible to every active staff member.</p></div>
+      <label className="field-label">Update type<select name="category" defaultValue="general"><option value="employee_of_month">Employee of the month</option><option value="new_employee">New team member</option><option value="promotion">Promotion</option><option value="general">Team update</option></select></label>
+      <label className="field-label">Title<input name="title" required minLength="3" maxLength="120" placeholder="A short, clear title" /></label>
+      <label className="field-label">Message<textarea name="body" required minLength="3" maxLength="2000" rows="3" placeholder="Write a message for the team" /></label>
+      <button disabled={busy} className="staff-primary staff-small"><Plus size={15} /> Publish to team</button>
+    </form>}
+    {unread.length > 1 && <div className="announcement-bulk-action"><span>{unread.length} updates need your attention.</span><button className="staff-secondary" disabled={busy} onClick={() => onAction(() => Promise.all(unread.map((announcement) => request(`/api/staff/announcements/${announcement.id}/read`, null, { method: "PATCH" }))), "All announcements marked as read.")}>Mark all as read</button></div>}
+    {announcements.length === 0 ? <EmptyState>No team updates have been posted yet.</EmptyState> : <div className="announcement-list">{announcements.map((announcement) => <article className={`announcement-card ${announcement.readAt ? "" : "is-unread"}`} key={announcement.id}>
+      <div className="announcement-card-top"><span className={`announcement-category announcement-category-${announcement.category}`}>{announcementLabels[announcement.category] || announcementLabels.general}</span><time dateTime={announcement.createdAt}>{new Date(announcement.createdAt).toLocaleString("en-GH", { dateStyle: "medium", timeStyle: "short" })}</time></div>
+      <h3>{announcement.title}</h3><p>{announcement.body}</p><div className="announcement-card-footer"><span>Posted by {announcement.authorName || "Restaurant management"}</span>{announcement.readAt ? <span className="announcement-read-label">Read</span> : <button className="staff-secondary" disabled={busy} onClick={() => onAction(() => request(`/api/staff/announcements/${announcement.id}/read`, null, { method: "PATCH" }), "Announcement marked as read.")}>Mark as read</button>}</div>
+    </article>)}</div>}
+  </section>;
+}
+
+function FeedbackInbox({ summary }) {
+  return <section className="staff-content">
+    <div className="staff-section-intro"><div><h2>Guest feedback</h2><p>Private feedback from customers who completed a paid order.</p></div><span className="staff-count">{summary.count} responses</span></div>
+    <div className="feedback-overview staff-panel"><div><span>Average rating</span><strong><Star size={19} fill="currentColor" /> {summary.count ? summary.averageRating.toFixed(1) : "—"}<small> / 5</small></strong></div><p>Customers can leave one rating after their order is completed.</p></div>
+    {summary.feedback.length === 0 ? <EmptyState>No guest feedback yet. Completed orders can be rated from the Track order page.</EmptyState> : <div className="feedback-list">{summary.feedback.map((entry) => <article className="feedback-card" key={entry.id}>
+      <div className="feedback-card-top"><div><strong>{entry.customerName}</strong><span>{entry.orderNumber} · {entry.orderType}</span></div><time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleDateString("en-GH", { dateStyle: "medium" })}</time></div>
+      <div className="feedback-stars" aria-label={`${entry.rating} out of 5 stars`}>{Array.from({ length: 5 }, (_, index) => <Star key={index} size={16} fill={index < entry.rating ? "currentColor" : "none"} />)}<strong>{entry.rating}/5</strong></div>
+      {entry.comment ? <p>{entry.comment}</p> : <p className="feedback-no-comment">No written comment.</p>}
+    </article>)}</div>}
   </section>;
 }
 

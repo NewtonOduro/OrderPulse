@@ -112,6 +112,14 @@ const schema = `
     quantity INTEGER NOT NULL CHECK (quantity > 0)
   );
 
+  CREATE TABLE IF NOT EXISTS order_feedback (
+    id SERIAL PRIMARY KEY,
+    order_id INTEGER NOT NULL UNIQUE REFERENCES orders(id) ON DELETE CASCADE,
+    rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    comment_text TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL,
@@ -171,6 +179,23 @@ const schema = `
     entity_id TEXT,
     details TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS staff_announcements (
+    id SERIAL PRIMARY KEY,
+    category TEXT NOT NULL CHECK (category IN ('employee_of_month', 'new_employee', 'promotion', 'general')),
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS staff_announcement_reads (
+    id SERIAL PRIMARY KEY,
+    announcement_id INTEGER NOT NULL REFERENCES staff_announcements(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    read_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (announcement_id, user_id)
   );
 
   CREATE TABLE IF NOT EXISTS job_applications (

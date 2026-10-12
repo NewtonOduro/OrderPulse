@@ -131,6 +131,46 @@ export const trackOrder = async (request, response) => {
   return response.json(await readTrackedOrder(order));
 };
 
+export const submitOrderFeedback = async (request, response) => {
+  const { orderNumber, phone, rating, comment = "" } = request.body ?? {};
+  if (
+    typeof orderNumber !== "string" ||
+    !/^GH-[A-F0-9]{8,32}$/i.test(orderNumber.trim()) ||
+    !validText(phone, 7, 30) ||
+    !Number.isInteger(rating) ||
+    rating < 1 ||
+    rating > 5 ||
+    typeof comment !== "string" ||
+    comment.trim().length > 1000
+  ) {
+    return response.status(400).json({ error: "Enter your order details, a rating from 1 to 5, and a comment of no more than 1,000 characters." });
+  }
+
+  const result = await db.transaction(async (tx) => {
+    const order = await tx.get("SELECT * FROM orders WHERE LOWER(order_number) = LOWER(?) FOR UPDATE", [orderNumber.trim()]);
+    if (!order || normalizedPhone(order.phone) !== normalizedPhone(phone.trim())) {
+      return { status: 404, error: "We couldn't find an order with those details." };
+    }
+    if (order.payment_status !== "paid" || order.status !== "completed") {
+      return { status: 409, error: "Feedback is available after your paid order is completed." };
+    }
+    if (await tx.get("SELECT id FROM order_feedback WHERE order_id = ?", [order.id])) {
+      return { status: 409, error: "Feedback has already been submitted for this order." };
+    }
+    const inserted = await tx.run(
+      "INSERT INTO order_feedback (order_id, rating, comment_text) VALUES (?, ?, ?)",
+      [order.id, rating, comment.trim()],
+    );
+    const feedback = await tx.get("SELECT id, rating, comment_text, created_at FROM order_feedback WHERE id = ?", [inserted.lastInsertRowid]);
+    return {
+      status: 201,
+      feedback: { rating: feedback.rating, comment: feedback.comment_text, createdAt: feedback.created_at },
+    };
+  });
+  if (result.error) return response.status(result.status).json({ error: result.error });
+  return response.status(result.status).json({ feedback: result.feedback });
+};
+
 
 export const createOrder = async (request, response) => {
   if (!process.env.PAYSTACK_SECRET_KEY?.trim()) {
@@ -456,12 +496,15 @@ export const createMenuItem = async (request, response) => {
 
 
 async function readTrackedOrder(order) {
-  const items = await db.all(`
-    SELECT item_name, quantity, unit_price_pesewas
-    FROM order_items
-    WHERE order_id = ?
-    ORDER BY id
-  `, [order.id]);
+  const [items, feedback] = await Promise.all([
+    db.all(`
+      SELECT item_name, quantity, unit_price_pesewas
+      FROM order_items
+      WHERE order_id = ?
+      ORDER BY id
+    `, [order.id]),
+    db.get("SELECT rating, comment_text, created_at FROM order_feedback WHERE order_id = ?", [order.id]),
+  ]);
   return {
     orderNumber: order.order_number,
     status: order.status,
@@ -470,6 +513,12 @@ async function readTrackedOrder(order) {
     total: order.total_pesewas / 100,
     createdAt: order.created_at,
     updatedAt: order.updated_at,
+    feedback: feedback ? {
+      rating: feedback.rating,
+      comment: feedback.comment_text,
+      createdAt: feedback.created_at,
+    } : null,
+    feedbackEligible: order.payment_status === "paid" && order.status === "completed" && !feedback,
     items: items.map((item) => ({
       name: item.item_name,
       quantity: item.quantity,
