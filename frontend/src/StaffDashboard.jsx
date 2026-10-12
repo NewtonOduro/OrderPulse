@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { beverageGroups, beverageSubcategories, menuCategories } from "./menu-categories.js";
+import { displayOrderNumber } from "./order-number.js";
 
 const tabs = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
@@ -130,8 +131,8 @@ function StaffDashboard({ onExit, isOnline }) {
         if (orderAlertsEnabledRef.current && "Notification" in window && Notification.permission === "granted") {
           new Notification(newlyPaidOrders.length === 1 ? "New paid kitchen order" : `${newlyPaidOrders.length} new kitchen orders`, {
             body: newlyPaidOrders.length === 1
-              ? `${newlyPaidOrders[0].orderNumber} is ready for the kitchen.`
-              : `Newest: ${newlyPaidOrders[0].orderNumber}`,
+              ? `${displayOrderNumber(newlyPaidOrders[0].orderNumber)} is ready for the kitchen.`
+              : `Newest: ${displayOrderNumber(newlyPaidOrders[0].orderNumber)}`,
             tag: "orderpulse-new-kitchen-order",
           });
         }
@@ -424,7 +425,7 @@ function TeamManagement({ users, busy, onAction }) {
 }
 
 function OrderRow({ order }) {
-  return <div className="staff-list-row"><div className="staff-row-avatar"><ChefHat size={16} /></div><div className="staff-row-main"><strong>{order.orderNumber}</strong><small>{order.items.map((item) => `${item.quantity}× ${item.name}`).join(", ")}</small></div><StatusPill>{order.status}</StatusPill></div>;
+  return <div className="staff-list-row"><div className="staff-row-avatar"><ChefHat size={16} /></div><div className="staff-row-main"><strong title={`Full order number: ${order.orderNumber}`}>{displayOrderNumber(order.orderNumber)}</strong><small>{order.items.map((item) => `${item.quantity}× ${item.name}`).join(", ")}</small></div><StatusPill>{order.status}</StatusPill></div>;
 }
 
 function EmptyState({ children }) {
@@ -561,7 +562,7 @@ function MenuManagement({ menuItems, busy, onAction, pin, manager }) {
 function Orders({ orders, busy, onAction, pin }) {
   return <section className="staff-content">
     <div className="staff-section-intro"><div><h2>All orders</h2><p>Paystack verifies payments automatically before the kitchen starts preparing an order.</p></div><span className="staff-count">{orders.length} total</span></div>
-    {orders.length === 0 ? <EmptyState>Guest orders will appear here.</EmptyState> : <div className="staff-card-list">{orders.map((order) => <article className="order-card" key={order.id}><div className="order-card-top"><div><h3>{order.orderNumber}</h3><p>{order.customerName} · {order.phone} · {order.orderType}</p></div><strong>{money(order.total)}</strong></div><div className="order-card-items">{order.items.map((item, index) => <span key={`${order.id}-${index}`}>{item.quantity} × {item.name}</span>)}</div><div className="order-card-bottom">{order.paymentStatus !== "paid" ? <><span className="status-pill status-pending">Paystack payment pending</span><p className="order-payment-review">Preparation stays locked until Paystack confirms this transaction.</p></> : <><StatusPill>{orderStatusLabels[order.status] ? orderStatusLabels[order.status] : order.status}</StatusPill><StatusPill>{order.paymentStatus}</StatusPill><label className="staff-select-label">Update status<select value={order.status} disabled={busy} onChange={(event) => onAction(() => request(`/api/staff/orders/${order.id}`, null, { method: "PATCH", body: JSON.stringify({ status: event.target.value }) }), `${order.orderNumber} marked ${event.target.value}.`)}>{orderStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label></>}</div></article>)}</div>}
+    {orders.length === 0 ? <EmptyState>Guest orders will appear here.</EmptyState> : <div className="staff-card-list">{orders.map((order) => <article className="order-card" key={order.id}><div className="order-card-top"><div><h3 title={`Full order number: ${order.orderNumber}`}>{displayOrderNumber(order.orderNumber)}</h3><p>{order.customerName} · {order.phone} · {order.orderType}</p></div><strong>{money(order.total)}</strong></div><div className="order-card-items">{order.items.map((item, index) => <span key={`${order.id}-${index}`}>{item.quantity} × {item.name}</span>)}</div><div className="order-card-bottom">{order.paymentStatus !== "paid" ? <><span className="status-pill status-pending">Paystack payment pending</span><p className="order-payment-review">Preparation stays locked until Paystack confirms this transaction.</p></> : <><StatusPill>{orderStatusLabels[order.status] ? orderStatusLabels[order.status] : order.status}</StatusPill><StatusPill>{order.paymentStatus}</StatusPill><label className="staff-select-label">Update status<select value={order.status} disabled={busy} onChange={(event) => onAction(() => request(`/api/staff/orders/${order.id}`, null, { method: "PATCH", body: JSON.stringify({ status: event.target.value }) }), `${order.orderNumber} marked ${event.target.value}.`)}>{orderStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label></>}</div></article>)}</div>}
   </section>;
 }
 
@@ -579,11 +580,11 @@ function Kitchen({ orders, busy, onAction, alertsEnabled, newOrderAlert, onEnabl
   };
   return <section className="staff-content">
     <div className="staff-section-intro"><div><h2>Kitchen display</h2><p>Prioritized paid tickets. Move each order forward as the kitchen works.</p></div><div className="kitchen-header-actions"><span className="staff-live"><i /> Live · 15 sec</span><button type="button" className="staff-secondary" onClick={alertsEnabled ? onDisableAlerts : onEnableAlerts}>{alertsEnabled ? "Turn alerts off" : "Enable new-order alerts"}</button></div></div>
-    {newOrderAlert && <div className="kitchen-new-order-alert" role="status" aria-live="assertive"><div><strong>{newOrderAlert.count === 1 ? "New paid order received" : `${newOrderAlert.count} new paid orders received`}</strong><span>{newOrderAlert.orderNumber} is at the top of the kitchen queue.</span></div><button type="button" onClick={onDismissAlert} aria-label="Dismiss new order alert"><X size={17} /></button></div>}
+    {newOrderAlert && <div className="kitchen-new-order-alert" role="status" aria-live="assertive"><div><strong>{newOrderAlert.count === 1 ? "New paid order received" : `${newOrderAlert.count} new paid orders received`}</strong><span title={`Full order number: ${newOrderAlert.orderNumber}`}>{displayOrderNumber(newOrderAlert.orderNumber)} is at the top of the kitchen queue.</span></div><button type="button" onClick={onDismissAlert} aria-label="Dismiss new order alert"><X size={17} /></button></div>}
     {orders.length === 0 ? <EmptyState>All clear. Paid orders will appear here as soon as payment is confirmed.</EmptyState> : <div className="kitchen-board">{columns.map((column) => {
       const tickets = orders.filter((order) => order.status === column.status);
       return <section className="kitchen-column" key={column.status}><header><h3>{column.title}</h3><span>{tickets.length}</span></header>
-        {tickets.slice().sort((first, second) => Date.parse(first.createdAt) - Date.parse(second.createdAt)).map((order) => <article className={`kitchen-ticket kitchen-ticket-${order.status}`} key={order.id}><div className="kitchen-ticket-head"><strong>{order.orderNumber}</strong><span>{order.orderType}</span></div><div className="kitchen-ticket-meta"><span>{order.customerName} · {order.phone}</span><time dateTime={order.createdAt}>{ageLabel(order.createdAt)}</time></div><ul>{order.items.map((item, index) => <li key={`${order.id}-${index}`}><b>{item.quantity}×</b> {item.name}</li>)}</ul><div className="kitchen-ticket-footer"><span>{money(order.total)}</span><button disabled={busy} className="staff-primary staff-small" onClick={() => onAction(() => request(`/api/staff/orders/${order.id}`, null, { method: "PATCH", body: JSON.stringify({ status: column.next }) }), `${order.orderNumber} moved to ${column.next}.`)}>{column.button}</button></div></article>)}
+        {tickets.slice().sort((first, second) => Date.parse(first.createdAt) - Date.parse(second.createdAt)).map((order) => <article className={`kitchen-ticket kitchen-ticket-${order.status}`} key={order.id}><div className="kitchen-ticket-head"><strong title={`Full order number: ${order.orderNumber}`}>{displayOrderNumber(order.orderNumber)}</strong><span>{order.orderType}</span></div><div className="kitchen-ticket-meta"><span>{order.customerName} · {order.phone}</span><time dateTime={order.createdAt}>{ageLabel(order.createdAt)}</time></div><ul>{order.items.map((item, index) => <li key={`${order.id}-${index}`}><b>{item.quantity}×</b> {item.name}</li>)}</ul><div className="kitchen-ticket-footer"><span>{money(order.total)}</span><button disabled={busy} className="staff-primary staff-small" onClick={() => onAction(() => request(`/api/staff/orders/${order.id}`, null, { method: "PATCH", body: JSON.stringify({ status: column.next }) }), `${order.orderNumber} moved to ${column.next}.`)}>{column.button}</button></div></article>)}
         {tickets.length === 0 && <EmptyState>Nothing here right now.</EmptyState>}
       </section>;
     })}</div>}
@@ -635,7 +636,7 @@ function FeedbackInbox({ summary }) {
     <div className="staff-section-intro"><div><h2>Guest feedback</h2><p>Private feedback from customers who completed a paid order.</p></div><span className="staff-count">{summary.count} responses</span></div>
     <div className="feedback-overview staff-panel"><div><span>Average rating</span><strong><Star size={19} fill="currentColor" /> {summary.count ? summary.averageRating.toFixed(1) : "—"}<small> / 5</small></strong></div><p>Customers can leave one rating after their order is completed.</p></div>
     {summary.feedback.length === 0 ? <EmptyState>No guest feedback yet. Completed orders can be rated from the Track order page.</EmptyState> : <div className="feedback-list">{summary.feedback.map((entry) => <article className="feedback-card" key={entry.id}>
-      <div className="feedback-card-top"><div><strong>{entry.customerName}</strong><span>{entry.orderNumber} · {entry.orderType}</span></div><time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleDateString("en-GH", { dateStyle: "medium" })}</time></div>
+      <div className="feedback-card-top"><div><strong>{entry.customerName}</strong><span title={`Full order number: ${entry.orderNumber}`}>{displayOrderNumber(entry.orderNumber)} · {entry.orderType}</span></div><time dateTime={entry.createdAt}>{new Date(entry.createdAt).toLocaleDateString("en-GH", { dateStyle: "medium" })}</time></div>
       <div className="feedback-stars" aria-label={`${entry.rating} out of 5 stars`}>{Array.from({ length: 5 }, (_, index) => <Star key={index} size={16} fill={index < entry.rating ? "currentColor" : "none"} />)}<strong>{entry.rating}/5</strong></div>
       {entry.comment ? <p>{entry.comment}</p> : <p className="feedback-no-comment">No written comment.</p>}
     </article>)}</div>}

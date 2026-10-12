@@ -6,6 +6,7 @@ import {
   ChevronDown,
   CircleUserRound,
   Clock3,
+  Copy,
   Download,
   Leaf,
   MapPin,
@@ -21,6 +22,7 @@ import {
 import AuthDialog from "./AuthDialog.jsx";
 import StaffDashboard from "./StaffDashboard.jsx";
 import { beverageGroups, beverageSubcategories, menuCategories } from "./menu-categories.js";
+import { displayOrderNumber } from "./order-number.js";
 import { downloadReceiptPdf } from "./receipt-pdf.js";
 
 const categories = ["All", ...menuCategories];
@@ -130,6 +132,8 @@ function App() {
   const [bookingNotifications, setBookingNotifications] = useState(null);
   const [orderMessage, setOrderMessage] = useState("");
   const [orderReceipt, setOrderReceipt] = useState(null);
+  const [receiptCopyMessage, setReceiptCopyMessage] = useState("");
+  const [showFullReceiptOrderNumber, setShowFullReceiptOrderNumber] = useState(false);
   const [paymentCallback, setPaymentCallback] = useState(() =>
     new URLSearchParams(window.location.search).get("payment") === "paystack",
   );
@@ -946,10 +950,25 @@ function App() {
     }
   }
 
+  async function copyFullReceiptOrderNumber() {
+    if (!orderReceipt) return;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
+      await navigator.clipboard.writeText(orderReceipt.orderNumber);
+      setReceiptCopyMessage("Full order number copied.");
+      setShowFullReceiptOrderNumber(false);
+    } catch {
+      setShowFullReceiptOrderNumber(true);
+      setReceiptCopyMessage("Copy the full order number shown below.");
+    }
+  }
+
   function closeCheckout() {
     setCheckoutOpen(false);
     setOrderMessage("");
     setOrderReceipt(null);
+    setReceiptCopyMessage("");
+    setShowFullReceiptOrderNumber(false);
     setPaymentCallback(false);
   }
 
@@ -1193,7 +1212,7 @@ function App() {
               </form>
               {trackingError && <p role="alert" className="mt-4 rounded-xl bg-sky-50 p-3 text-sm text-sky-950">{trackingError}</p>}
               {trackingOrder && <div className="mt-5 rounded-2xl bg-white p-4" aria-live="polite">
-                <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs text-forest/50">Order {trackingOrder.orderNumber}</p><p className="mt-1 text-sm font-semibold">Current status</p></div><span className={`status-pill status-${trackingOrder.status}`}>{trackingOrder.status === "awaiting_payment" ? "Awaiting payment" : trackingOrder.status}</span></div>
+                <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs text-forest/50" title={`Full order number: ${trackingOrder.orderNumber}`}>Order {displayOrderNumber(trackingOrder.orderNumber)}</p><p className="mt-1 text-sm font-semibold">Current status</p></div><span className={`status-pill status-${trackingOrder.status}`}>{trackingOrder.status === "awaiting_payment" ? "Awaiting payment" : trackingOrder.status}</span></div>
                 <p className="mt-2 text-xs text-forest/55">Payment: {trackingOrder.paymentStatus === "paid" ? "confirmed" : "pending"}</p>
                 <p className="mt-2 text-xs text-forest/55">{trackingOrder.items.map((item) => `${item.quantity} × ${item.name}`).join(" · ")}</p>
                 {!["completed", "cancelled"].includes(trackingOrder.status) && <p className="mt-2 text-[11px] text-leaf">This status refreshes automatically every 15 seconds.</p>}
@@ -1332,12 +1351,12 @@ function App() {
           <div className="receipt-printable">
             <header className="receipt-header">
               <div className="receipt-brand"><span className="receipt-brand-mark" aria-hidden="true">O</span><div><p>OrderPulse</p><span>Restaurant ordering in Kumasi</span></div></div>
-              <div className="receipt-heading"><h2 id="receipt-heading">Receipt</h2><span>{orderReceipt.orderNumber}</span></div>
+              <div className="receipt-heading"><h2 id="receipt-heading">Receipt</h2><span title={`Full order number: ${orderReceipt.orderNumber}`}>{displayOrderNumber(orderReceipt.orderNumber)}</span></div>
             </header>
             <div className="receipt-body">
               <div className="receipt-summary">
                 <div className="receipt-metadata">
-                  <div><span>Order number</span><strong>{orderReceipt.orderNumber}</strong></div>
+                  <div><span>Order number</span><div className="receipt-order-id-row"><strong title={`Full order number: ${orderReceipt.orderNumber}`}>{displayOrderNumber(orderReceipt.orderNumber)}</strong><button type="button" className="receipt-copy-order-id" onClick={copyFullReceiptOrderNumber}><Copy size={13} /> Copy full ID</button>{showFullReceiptOrderNumber && <code>{orderReceipt.orderNumber}</code>}{receiptCopyMessage && <small role="status">{receiptCopyMessage}</small>}</div></div>
                   <div><span>Ordered</span><strong>{new Date(orderReceipt.createdAt).toLocaleString("en-GH", { dateStyle: "medium", timeStyle: "short" })}</strong></div>
                 </div>
                 <span className={`receipt-payment-status ${orderReceipt.paymentStatus === "paid" ? "is-paid" : ""}`}>{orderReceipt.paymentStatus === "paid" ? "Paid" : "Payment pending"}</span>
