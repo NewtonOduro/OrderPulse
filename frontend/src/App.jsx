@@ -1189,33 +1189,56 @@ function App() {
       </div>}
 
       {checkoutOpen && <div className="checkout-overlay fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-forest/45 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) closeCheckout(); }}>
-        {orderReceipt ? <section className="receipt-card my-auto w-full max-w-md rounded-[1.5rem] bg-cream p-6 shadow-2xl sm:p-8" aria-labelledby="receipt-heading">
+        {orderReceipt ? <section className="receipt-card my-auto w-full max-w-2xl rounded-[1.5rem] bg-white shadow-2xl" aria-labelledby="receipt-heading">
           <div className="receipt-printable">
-            <div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.2em] text-leaf">OrderPulse · Ahodwo, Kumasi</p><h2 id="receipt-heading" className="mt-1 font-display text-2xl font-semibold">Order confirmation</h2></div><span className="receipt-print-icon"><Printer size={22} /></span></div>
-            <p className="mt-4 text-sm">Thank you, {orderReceipt.customerName}. Your order has been received.</p>
-            <div className="my-5 rounded-2xl bg-white p-4">
-              <p className="text-xs text-forest/55">Order number</p><p className="font-semibold">{orderReceipt.orderNumber}</p>
-              <div className="mt-3 space-y-2 border-t border-forest/10 pt-3">{orderReceipt.items.map((item) => <div key={`${item.name}-${item.quantity}`} className="flex justify-between gap-3 text-xs"><span>{item.quantity} × {item.name}</span><span className="font-semibold">{money(item.unitPrice * item.quantity)}</span></div>)}</div>
-              <div className="mt-3 flex justify-between border-t border-forest/10 pt-3 text-sm font-bold"><span>Order total</span><span>{money(orderReceipt.total)}</span></div>
-            </div>
-            <p className="text-xs text-forest/60">{orderReceipt.orderType === "dine-in" ? "Dine in" : "Pickup"} · {new Date(orderReceipt.createdAt).toLocaleString("en-GH", { dateStyle: "medium", timeStyle: "short" })}</p>
-            <div className="mt-4 rounded-xl border border-forest/10 bg-white p-4 text-sm">
-              <p className="font-bold">Paystack · {orderReceipt.paymentStatus === "paid" ? "Payment confirmed" : "Awaiting payment confirmation"}</p>
-              <p className="mt-2">Order total: <strong>{money(orderReceipt.total)}</strong></p>
-              <p className="mt-1 text-xs text-forest/60">Payment is verified securely by Paystack before the kitchen begins preparing your order.</p>
+            <header className="receipt-header">
+              <div className="receipt-brand"><span className="receipt-brand-mark" aria-hidden="true">O</span><div><p>OrderPulse</p><span>Restaurant ordering in Kumasi</span></div></div>
+              <div className="receipt-heading"><h2 id="receipt-heading">Receipt</h2><span>{orderReceipt.orderNumber}</span></div>
+            </header>
+            <div className="receipt-body">
+              <div className="receipt-summary">
+                <div className="receipt-metadata">
+                  <div><span>Order number</span><strong>{orderReceipt.orderNumber}</strong></div>
+                  <div><span>Ordered</span><strong>{new Date(orderReceipt.createdAt).toLocaleString("en-GH", { dateStyle: "medium", timeStyle: "short" })}</strong></div>
+                </div>
+                <span className={`receipt-payment-status ${orderReceipt.paymentStatus === "paid" ? "is-paid" : ""}`}>{orderReceipt.paymentStatus === "paid" ? "Paid" : "Payment pending"}</span>
+              </div>
+              <div className="receipt-parties">
+                <section className="receipt-party" aria-label="Customer">
+                  <h3>Billed to</h3><strong>{orderReceipt.customerName}</strong><span>{orderReceipt.phone}</span><span>{orderReceipt.orderType === "dine-in" ? "Dine in" : "Pickup"}</span>
+                </section>
+                <section className="receipt-party" aria-label="Restaurant">
+                  <h3>From</h3><strong>OrderPulse</strong><span>Ahodwo, Kumasi, Ghana</span><span>Ghana</span>
+                </section>
+              </div>
+              <div className="receipt-table-wrap">
+                <table className="receipt-items">
+                  <thead><tr><th scope="col">Item</th><th scope="col">Qty</th><th scope="col">Unit price</th><th scope="col">Amount</th></tr></thead>
+                  <tbody>{orderReceipt.items.map((item) => <tr key={`${item.name}-${item.quantity}`}><td>{item.name}</td><td>{item.quantity}</td><td>{money(item.unitPrice)}</td><td>{money(item.unitPrice * item.quantity)}</td></tr>)}</tbody>
+                </table>
+              </div>
+              <div className="receipt-totals">
+                <div><span>Subtotal</span><span>{money(orderReceipt.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0))}</span></div>
+                <div className="receipt-total-line"><strong>{orderReceipt.paymentStatus === "paid" ? "Total paid" : "Order total"}</strong><strong>{money(orderReceipt.total)}</strong></div>
+              </div>
+              <div className="receipt-payment-reference">
+                <strong>{orderReceipt.paymentStatus === "paid" ? "Paid with Paystack" : "Payment via Paystack"}</strong>
+                <span>Reference: {orderReceipt.reference || orderReceipt.paymentReference || orderReceipt.orderNumber}</span>
+              </div>
+              <footer className="receipt-footer"><strong>Thank you for ordering with OrderPulse!</strong><span>Ahodwo, Kumasi, Ghana</span></footer>
             </div>
           </div>
-          <div className="receipt-delivery mt-5 rounded-xl bg-white p-3 text-xs" role="status">
+          <div className="receipt-delivery mx-6 mt-5 rounded-xl bg-cream p-3 text-xs sm:mx-8" role="status">
             <p>Email: {orderReceipt.notifications.email.message}</p>
           </div>
-          <div className="mt-4 rounded-xl bg-white p-3 text-sm" aria-live="polite">
+          <div className="mx-6 mt-4 rounded-xl bg-cream p-3 text-sm sm:mx-8" aria-live="polite">
             <div className="flex items-center justify-between gap-3"><span className="text-forest/55">Order status</span>{(() => {
               const status = trackingOrder?.orderNumber === orderReceipt.orderNumber ? trackingOrder.status : orderReceipt.status;
               return <span className={`status-pill status-${status}`}>{status === "awaiting_payment" ? "Awaiting payment" : status}</span>;
             })()}</div>
             <p className="mt-2 text-[11px] text-forest/50">Use your order number and checkout phone in Track order to check progress later.</p>
           </div>
-          <div className="receipt-actions mt-5 grid grid-cols-3 gap-2"><button type="button" onClick={() => downloadReceiptPdf(orderReceipt)} className="inline-flex items-center justify-center gap-2 rounded-full border border-forest/15 px-3 py-3 text-xs font-semibold"><Download size={15} /> PDF</button><button type="button" onClick={() => window.print()} className="inline-flex items-center justify-center gap-2 rounded-full border border-forest/15 px-3 py-3 text-xs font-semibold"><Printer size={15} /> Print</button><button type="button" onClick={closeCheckout} className="rounded-full bg-forest px-3 py-3 text-xs font-semibold text-white">Done</button></div>
+          <div className="receipt-actions mx-6 my-5 grid grid-cols-3 gap-2 sm:mx-8"><button type="button" onClick={() => downloadReceiptPdf(orderReceipt)} className="inline-flex items-center justify-center gap-2 rounded-full border border-forest/15 px-3 py-3 text-xs font-semibold"><Download size={15} /> PDF</button><button type="button" onClick={() => window.print()} className="inline-flex items-center justify-center gap-2 rounded-full border border-forest/15 px-3 py-3 text-xs font-semibold"><Printer size={15} /> Print</button><button type="button" onClick={closeCheckout} className="rounded-full bg-forest px-3 py-3 text-xs font-semibold text-white">Done</button></div>
         </section> : paymentCallback ? <section className="receipt-card my-auto w-full max-w-md rounded-[1.5rem] bg-cream p-6 shadow-2xl sm:p-8" aria-labelledby="payment-result-heading">
           <p className="text-[10px] font-bold uppercase tracking-[.2em] text-leaf">OrderPulse · Ahodwo, Kumasi</p>
           <h2 id="payment-result-heading" className="mt-2 font-display text-2xl font-semibold">Payment status</h2>
