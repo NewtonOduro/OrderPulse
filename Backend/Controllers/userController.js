@@ -1,6 +1,10 @@
 import bcrypt from "bcryptjs";
 import { db } from "../database/database.js";
-import { consumeEmailAuthToken, createEmailAuthToken } from "../services/email-auth.js";
+import {
+  consumeEmailAuthToken,
+  createEmailAuthToken,
+  revokeOtherEmailAuthTokens,
+} from "../services/email-auth.js";
 import { sendPasswordResetEmail, sendVerificationEmail } from "../services/order-notifications.js";
 import { clearSession, safeUser, setSession } from "../middleware/auth.js";
 import { emailPattern, minimumPasswordLength, validText } from "./shared.js";
@@ -79,7 +83,11 @@ export const resendVerification = async (request, response) => {
     if (user) {
       const token = await createEmailAuthToken(user.id, "verify_email");
       const sent = await sendVerificationEmail({ email: user.email, name: user.name, token });
-      if (sent.status !== "sent") console.error(`Verification email not sent: ${sent.status} - ${sent.message}`);
+      if (sent.status === "sent") {
+        await revokeOtherEmailAuthTokens(user.id, "verify_email", token);
+      } else {
+        console.error(`Verification email not sent: ${sent.status} - ${sent.message}`);
+      }
     }
   }
   return response.status(202).json({
@@ -98,11 +106,15 @@ export const forgotPassword = async (request, response) => {
     if (user) {
       const token = await createEmailAuthToken(user.id, "reset_password");
       const sent = await sendPasswordResetEmail({ email: user.email, name: user.name, token });
-      if (sent.status !== "sent") console.error(`Password reset email not sent: ${sent.status} - ${sent.message}`);
+      if (sent.status === "sent") {
+        await revokeOtherEmailAuthTokens(user.id, "reset_password", token);
+      } else {
+        console.error(`Password reset email not sent: ${sent.status} - ${sent.message}`);
+      }
     }
   }
   return response.status(202).json({
-    message: "If an active account uses that email, a password reset link will be sent.",
+    message: "If an active account uses that email, a password reset link will be sent. Check your spam folder and confirm you entered the email used for your account.",
   });
 };
 

@@ -11,8 +11,10 @@ for (const key of [
   "SMTP_USER",
   "SMTP_PASS",
   "SMTP_FROM",
+  "BREVO_API_KEY",
   "RESEND_API_KEY",
   "EMAIL_FROM",
+  "PUBLIC_APP_URL",
   "GMAIL_USER",
   "GMAIL_CLIENT_ID",
   "GMAIL_CLIENT_SECRET",
@@ -25,8 +27,16 @@ for (const key of [
 process.env.PAYSTACK_SECRET_KEY = "test-paystack-secret";
 const nativeFetch = globalThis.fetch;
 const paystackInitializations = [];
+const brevoMessages = [];
+let brevoResponseStatus = 201;
 globalThis.fetch = async (input, options = {}) => {
   const url = String(input);
+  if (url === "https://api.brevo.com/v3/smtp/email") {
+    brevoMessages.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ messageId: `test-email-${brevoMessages.length}` }), {
+      status: brevoResponseStatus,
+    });
+  }
   if (url.startsWith("https://api.paystack.co/transaction/initialize")) {
     const payload = JSON.parse(options.body);
     paystackInitializations.push(payload);
@@ -64,6 +74,11 @@ let managerCookie;
 
 function sessionCookie(response) {
   return response.headers.get("set-cookie")?.split(";")[0];
+}
+
+function restoreEnvironmentValue(key, value) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
 }
 
 before(async () => {
@@ -502,19 +517,37 @@ test("customers must create an account or sign in before reserving", async () =>
   assert.equal(unchanged.status, 200);
   assert.equal((await unchanged.json()).notifications, undefined);
 
-  const resetRequest = await fetch(`${baseUrl}/api/auth/forgot-password`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email: "kojo@example.com" }),
-  });
-  assert.equal(resetRequest.status, 202);
+  const previousBrevoKey = process.env.BREVO_API_KEY;
+  const previousEmailFrom = process.env.EMAIL_FROM;
+  const previousAppUrl = process.env.PUBLIC_APP_URL;
+  process.env.BREVO_API_KEY = "test-brevo-key";
+  process.env.EMAIL_FROM = "orders@example.com";
+  process.env.PUBLIC_APP_URL = "https://orderpulse.example.com";
+  let resetRequest;
+  try {
+    resetRequest = await fetch(`${baseUrl}/api/auth/forgot-password`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "kojo@example.com" }),
+    }).then(async (response) => ({ response, body: await response.json() }));
+  } finally {
+    restoreEnvironmentValue("BREVO_API_KEY", previousBrevoKey);
+    restoreEnvironmentValue("EMAIL_FROM", previousEmailFrom);
+    restoreEnvironmentValue("PUBLIC_APP_URL", previousAppUrl);
+  }
+  assert.equal(resetRequest.response.status, 202);
+  assert.match(resetRequest.body.message, /check your spam folder/i);
+  assert.equal(brevoMessages.at(-1).to[0].email, "kojo@example.com");
+  assert.match(brevoMessages.at(-1).textContent, /resetPassword=/);
+  const emailedResetToken = brevoMessages.at(-1).textContent.match(/resetPassword=([a-f0-9]{64})/)?.[1];
+  assert.ok(emailedResetToken);
   const unknownResetRequest = await fetch(`${baseUrl}/api/auth/forgot-password`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email: "unknown@example.com" }),
   });
   assert.equal(unknownResetRequest.status, 202);
-  assert.equal((await unknownResetRequest.json()).message, (await resetRequest.json()).message);
+  assert.equal((await unknownResetRequest.json()).message, resetRequest.body.message);
   const expiredToken = await createEmailAuthToken(registeredUser.id, "reset_password");
   const expiredTokenHash = createHash("sha256").update(expiredToken).digest("hex");
   await db.run("UPDATE email_auth_tokens SET expires_at = ? WHERE token_hash = ?", ["2000-01-01T00:00:00.000Z", expiredTokenHash]);
@@ -524,7 +557,7 @@ test("customers must create an account or sign in before reserving", async () =>
     body: JSON.stringify({ token: expiredToken, password: "new-guest-account-password-456" }),
   });
   assert.equal(expiredReset.status, 400);
-  const resetToken = await createEmailAuthToken(registeredUser.id, "reset_password");
+  const resetToken = emailedResetToken;
   const reset = await fetch(`${baseUrl}/api/auth/reset-password`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -545,6 +578,59 @@ test("customers must create an account or sign in before reserving", async () =>
     body: JSON.stringify({ token: resetToken, password: "another-password-123456" }),
   });
   assert.equal(reusedReset.status, 400);
+});
+
+test("a failed verification resend leaves the previously emailed link usable", async () => {
+  const previousBrevoKey = process.env.BREVO_API_KEY;
+  const previousEmailFrom = process.env.EMAIL_FROM;
+  const previousAppUrl = process.env.PUBLIC_APP_URL;
+  process.env.BREVO_API_KEY = "test-brevo-key";
+  process.env.EMAIL_FROM = "orders@example.com";
+  process.env.PUBLIC_APP_URL = "https://orderpulse.example.com";
+  brevoResponseStatus = 201;
+  try {
+    const registered = await fetch(`${baseUrl}/api/auth/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Akosua Boateng",
+        email: "akosua@example.com",
+        phone: "0240000001",
+        password: "akosua-account-password-123",
+      }),
+    });
+    assert.equal(registered.status, 201);
+    const firstEmail = brevoMessages.at(-1);
+    const firstToken = firstEmail.textContent.match(/verifyEmail=([a-f0-9]{64})/)?.[1];
+    assert.ok(firstToken);
+
+    brevoResponseStatus = 503;
+    const resend = await fetch(`${baseUrl}/api/auth/resend-verification`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "akosua@example.com" }),
+    });
+    assert.equal(resend.status, 202);
+    const firstTokenHash = createHash("sha256").update(firstToken).digest("hex");
+    const retainedToken = await db.get(
+      "SELECT used_at FROM email_auth_tokens WHERE token_hash = ?",
+      [firstTokenHash],
+    );
+    assert.equal(retainedToken.used_at, null);
+
+    const verified = await fetch(`${baseUrl}/api/auth/verify-email`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: firstToken }),
+    });
+    assert.equal(verified.status, 200);
+    assert.equal((await verified.json()).email, "akosua@example.com");
+  } finally {
+    restoreEnvironmentValue("BREVO_API_KEY", previousBrevoKey);
+    restoreEnvironmentValue("EMAIL_FROM", previousEmailFrom);
+    restoreEnvironmentValue("PUBLIC_APP_URL", previousAppUrl);
+    brevoResponseStatus = 201;
+  }
 });
 
 test("reservation availability checks seating capacity and blocks overlapping 90-minute bookings", async () => {

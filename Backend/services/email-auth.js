@@ -18,15 +18,21 @@ export async function createEmailAuthToken(userId, purpose) {
   const now = new Date();
   await db.transaction(async (transaction) => {
     await transaction.run(`
-      UPDATE email_auth_tokens SET used_at = ?
-      WHERE user_id = ? AND purpose = ? AND used_at IS NULL
-    `, [now.toISOString(), userId, purpose]);
-    await transaction.run(`
       INSERT INTO email_auth_tokens (user_id, purpose, token_hash, expires_at)
       VALUES (?, ?, ?, ?)
     `, [userId, purpose, hashToken(token), new Date(now.getTime() + lifetime).toISOString()]);
   });
   return token;
+}
+
+export async function revokeOtherEmailAuthTokens(userId, purpose, token) {
+  if (typeof token !== "string" || !/^[a-f0-9]{64}$/i.test(token) || !tokenLifetimes[purpose]) {
+    throw new Error("Invalid email authentication token.");
+  }
+  await db.run(`
+    UPDATE email_auth_tokens SET used_at = ?
+    WHERE user_id = ? AND purpose = ? AND token_hash != ? AND used_at IS NULL
+  `, [new Date().toISOString(), userId, purpose, hashToken(token)]);
 }
 
 export async function consumeEmailAuthToken(token, purpose, updateUser) {
