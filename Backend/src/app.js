@@ -354,7 +354,8 @@ app.post("/api/auth/resend-verification", emailAuthenticationLimiter, async (req
     `, [email.trim().toLowerCase()]);
     if (user) {
       const token = await createEmailAuthToken(user.id, "verify_email");
-      await sendVerificationEmail({ email: user.email, name: user.name, token });
+      const sent = await sendVerificationEmail({ email: user.email, name: user.name, token });
+      if (sent.status !== "sent") console.error(`Verification email not sent: ${sent.status} - ${sent.message}`);
     }
   }
   return response.status(202).json({
@@ -371,7 +372,8 @@ app.post("/api/auth/forgot-password", emailAuthenticationLimiter, async (request
     `, [email.trim().toLowerCase()]);
     if (user) {
       const token = await createEmailAuthToken(user.id, "reset_password");
-      await sendPasswordResetEmail({ email: user.email, name: user.name, token });
+      const sent = await sendPasswordResetEmail({ email: user.email, name: user.name, token });
+      if (sent.status !== "sent") console.error(`Password reset email not sent: ${sent.status} - ${sent.message}`);
     }
   }
   return response.status(202).json({

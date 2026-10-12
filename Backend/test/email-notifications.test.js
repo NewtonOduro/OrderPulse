@@ -2,10 +2,12 @@ import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   sendCareerApplicationNotifications,
+  sendPasswordResetEmail,
   sendVerificationEmail,
 } from "../src/order-notifications.js";
 
 const environmentKeys = [
+  "BREVO_API_KEY",
   "RESEND_API_KEY",
   "EMAIL_FROM",
   "SMTP_HOST",
@@ -31,6 +33,45 @@ afterEach(() => {
   }
   globalThis.fetch = originalFetch;
   console.error = originalConsoleError;
+});
+
+test("sends verification and password-reset emails through Brevo", async () => {
+  process.env.BREVO_API_KEY = "test-brevo-key";
+  process.env.EMAIL_FROM = "orders@example.com";
+  process.env.PUBLIC_APP_URL = "https://orderpulse.example.com";
+  process.env.GMAIL_USER = "";
+  process.env.RESEND_API_KEY = "";
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, options });
+    return new Response(JSON.stringify({ messageId: "email-id" }), { status: 201 });
+  };
+
+  const verification = await sendVerificationEmail({
+    email: "customer@example.com",
+    name: "Ama Mensah",
+    token: "verify-token",
+  });
+  const passwordReset = await sendPasswordResetEmail({
+    email: "customer@example.com",
+    name: "Ama Mensah",
+    token: "reset-token",
+  });
+
+  assert.equal(verification.status, "sent");
+  assert.equal(passwordReset.status, "sent");
+  assert.equal(requests.length, 2);
+  for (const request of requests) {
+    assert.equal(request.url, "https://api.brevo.com/v3/smtp/email");
+    assert.equal(request.options.headers["api-key"], "test-brevo-key");
+    assert.equal(request.options.headers["Content-Type"], "application/json");
+  }
+  const verificationPayload = JSON.parse(requests[0].options.body);
+  assert.deepEqual(verificationPayload.sender, { name: "OrderPulse", email: "orders@example.com" });
+  assert.deepEqual(verificationPayload.to, [{ email: "customer@example.com" }]);
+  assert.match(verificationPayload.textContent, /verifyEmail=verify-token/);
+  const resetPayload = JSON.parse(requests[1].options.body);
+  assert.match(resetPayload.textContent, /resetPassword=reset-token/);
 });
 
 test("sends verification emails through Resend's HTTPS API", async () => {

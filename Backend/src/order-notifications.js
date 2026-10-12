@@ -52,7 +52,8 @@ async function getGmailAccessToken(reference) {
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok || typeof result.access_token !== "string") {
-    throw new Error("GMAIL_AUTH_FAILED");
+    const detail = [result.error, result.error_description].filter(Boolean).join(" - ") || `HTTP ${response.status}`;
+    throw new Error(`GMAIL_AUTH_FAILED (${detail})`);
   }
   cachedGmailAccessToken = result.access_token;
   cachedGmailTokenExpiry = Date.now() + (Number(result.expires_in) || 3600) * 1000;
@@ -148,7 +149,9 @@ async function sendGmailEmail({ to, from, subject, text, html, reference, replyT
       signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) {
-      console.error(`Email delivery failed for ${reference} via Gmail API: HTTP ${response.status}`);
+      const errorBody = await response.json().catch(() => ({}));
+      const detail = errorBody?.error?.message || "no details";
+      console.error(`Email delivery failed for ${reference} via Gmail API: HTTP ${response.status} - ${detail}`);
       return { status: "failed", message: "Email could not be sent. Check the Gmail API OAuth settings and server logs." };
     }
     return { status: "sent", message: "Email sent." };
@@ -166,6 +169,50 @@ async function sendEmail({ to, subject, text, html, reference, replyTo, attachme
   }
 
   const from = process.env.EMAIL_FROM || process.env.SMTP_FROM;
+  if (process.env.BREVO_API_KEY) {
+    if (!from) {
+      const result = { status: "failed", message: "EMAIL_FROM must be set to a sender verified in Brevo." };
+      console.error(`Email delivery unavailable for ${reference}: ${result.message}`);
+      return result;
+    }
+    try {
+      const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+        method: "POST",
+        headers: {
+          "api-key": process.env.BREVO_API_KEY,
+          "Content-Type": "application/json",
+          accept: "application/json",
+        },
+        signal: AbortSignal.timeout(15000),
+        body: JSON.stringify({
+          sender: { name: "OrderPulse", email: from },
+          to: [{ email: to }],
+          subject,
+          textContent: text,
+          htmlContent: html,
+          ...(replyTo ? { replyTo: { email: replyTo } } : {}),
+          ...(attachments?.length ? {
+            attachment: attachments.map((attachment) => ({
+              name: attachment.filename,
+              content: Buffer.isBuffer(attachment.content)
+                ? attachment.content.toString("base64")
+                : Buffer.from(attachment.content).toString("base64"),
+            })),
+          } : {}),
+        }),
+      });
+      if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        console.error(`Email delivery failed for ${reference} via Brevo: HTTP ${response.status} - ${errorBody.message || "no details"}`);
+        return { status: "failed", message: "Email could not be sent. Check the Brevo settings and server logs." };
+      }
+      return { status: "sent", message: "Email sent." };
+    } catch (error) {
+      console.error(`Email delivery failed for ${reference} via Brevo:`, error.message);
+      return { status: "failed", message: "Email could not be sent. Check the Brevo settings and server logs." };
+    }
+  }
+
   if (
     process.env.GMAIL_USER ||
     process.env.GMAIL_CLIENT_ID ||
@@ -261,6 +308,31 @@ async function sendEmail({ to, subject, text, html, reference, replyTo, attachme
     console.error(`Email delivery failed for ${reference}:`, error.message);
     return { status: "failed", message: "Email could not be sent. Check the SMTP settings and server logs." };
   }
+}
+
+export async function checkEmailConfiguration() {
+  if (process.env.BREVO_API_KEY) {
+    console.info(`[email] Using Brevo. Sender: ${process.env.EMAIL_FROM || "(EMAIL_FROM NOT SET)"}. Links point to: ${process.env.PUBLIC_APP_URL || "(PUBLIC_APP_URL not set)"}`);
+    return;
+  }
+  const keys = ["GMAIL_USER", "GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET", "GMAIL_REFRESH_TOKEN"];
+  const missing = keys.filter((key) => !process.env[key]);
+  if (missing.length === keys.length) {
+    console.warn("[email] Gmail API is NOT configured. Verification and password-reset emails will not be sent.");
+    return;
+  }
+  if (missing.length) {
+    console.error(`[email] Gmail API configuration is incomplete. Missing: ${missing.join(", ")}`);
+    return;
+  }
+  try {
+    await getGmailAccessToken("startup check");
+    console.info("[email] Gmail API credentials are valid.");
+  } catch (error) {
+    console.error(`[email] Gmail API credentials were rejected: ${error.message}. Generate a new GMAIL_REFRESH_TOKEN.`);
+  }
+  const publicUrl = process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL || "(not set, defaulting to localhost)";
+  console.info(`[email] Links in emails will point to: ${publicUrl}`);
 }
 
 async function sendStaffEmail({ subject, text, html, reference }) {
