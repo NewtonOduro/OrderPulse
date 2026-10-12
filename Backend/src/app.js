@@ -15,6 +15,11 @@ import {
   sendVerificationEmail,
 } from "./order-notifications.js";
 import { getAvailableTables, reservationDurationMinutes } from "./reservation-availability.js";
+import {
+  hasValidPaystackSignature,
+  initializePaystackTransaction,
+  verifyPaystackTransaction,
+} from "./paystack.js";
 import { beverageGroups, isValidMenuPlacement, menuCategories } from "./menu-categories.js";
 import {
   auditStaffActivity,
@@ -150,6 +155,33 @@ app.post("/api/careers/applications", applicationLimiter, express.json({ limit: 
   });
   return response.status(201).json({ applicationNumber, notifications });
 });
+app.post("/api/paystack/webhook", express.raw({ type: "application/json", limit: "64kb" }), async (request, response) => {
+  const signature = request.get("x-paystack-signature");
+  const rawBody = Buffer.isBuffer(request.body) ? request.body.toString("utf8") : "";
+  if (!hasValidPaystackSignature(rawBody, signature)) {
+    return response.status(401).json({ error: "Invalid Paystack webhook signature." });
+  }
+  let event;
+  try {
+    event = JSON.parse(rawBody);
+  } catch {
+    return response.status(400).json({ error: "Invalid webhook payload." });
+  }
+  if (event.event !== "charge.success") return response.status(200).json({ received: true });
+  const reference = event.data?.reference;
+  if (typeof reference !== "string" || !/^[A-Za-z0-9._-]{8,120}$/.test(reference)) {
+    return response.status(400).json({ error: "Invalid payment reference." });
+  }
+  const matchingOrder = await db.get("SELECT id FROM orders WHERE payment_reference = ?", [reference]);
+  if (!matchingOrder) return response.status(200).json({ received: true });
+  try {
+    await verifyAndRecordPaystackPayment(reference);
+    return response.status(200).json({ received: true });
+  } catch (error) {
+    console.error(`Paystack webhook processing failed for ${reference}: ${error.message}`);
+    return response.status(500).json({ error: "Payment verification is temporarily unavailable." });
+  }
+});
 app.use(express.json({ limit: "32kb" }));
 
 const publicMenuItem = (item) => ({
@@ -234,11 +266,6 @@ const jobPositionTitles = [
 ];
 const minimumPasswordLength = 12;
 const maxMenuStock = 100000;
-const paymentInstructions = {
-  method: "MoMo",
-  number: "0545567500",
-  accountName: "Collins Oduro",
-};
 const normalizedPhone = (phone) => phone.replace(/[^\d+]/g, "");
 const utcDayRange = (date) => [
   `${date}T00:00:00.000Z`,
@@ -285,7 +312,7 @@ app.post("/api/auth/register", authenticationLimiter, async (request, response) 
       verificationEmail,
     });
   } catch (error) {
-    if (error.code === "23505") return response.status(409).json({ error: "An account with this email already exists. Sign in instead." });
+    if (["23505", "ER_DUP_ENTRY"].includes(error.code)) return response.status(409).json({ error: "An account with this email already exists. Sign in instead." });
     throw error;
   }
 });
@@ -414,8 +441,68 @@ async function readTrackedOrder(order) {
       quantity: item.quantity,
       unitPrice: item.unit_price_pesewas / 100,
     })),
-    paymentInstructions,
   };
+}
+
+function paymentCallbackUrl(request) {
+  const configuredUrl = process.env.PUBLIC_APP_URL || process.env.RENDER_EXTERNAL_URL;
+  const baseUrl = configuredUrl || `${request.protocol}://${request.get("host")}`;
+  const url = new URL(baseUrl);
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error("INVALID_PUBLIC_APP_URL");
+  if (process.env.NODE_ENV === "production" && url.protocol !== "https:") {
+    throw new Error("INVALID_PUBLIC_APP_URL");
+  }
+  url.pathname = "/";
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("payment", "paystack");
+  return url.toString();
+}
+
+async function readPaymentOrder(order) {
+  const trackedOrder = await readTrackedOrder(order);
+  return {
+    ...trackedOrder,
+    customerName: order.customer_name,
+    phone: order.phone,
+  };
+}
+
+async function verifyAndRecordPaystackPayment(reference) {
+  const order = await db.get("SELECT * FROM orders WHERE payment_reference = ?", [reference]);
+  if (!order) throw new Error("PAYMENT_ORDER_NOT_FOUND");
+  const payment = await verifyPaystackTransaction(reference);
+  if (
+    payment.status !== "success" ||
+    payment.currency !== "GHS" ||
+    Number(payment.amount) !== Number(order.total_pesewas) ||
+    payment.reference !== reference ||
+    payment.customer?.email?.toLowerCase() !== order.customer_email.toLowerCase()
+  ) {
+    throw new Error("PAYMENT_NOT_CONFIRMED");
+  }
+
+  const wasPaid = await db.transaction(async (transaction) => {
+    const result = await transaction.run(`
+      UPDATE orders
+      SET payment_status = 'paid', status = 'received', updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND payment_status = 'pending'
+    `, [order.id]);
+    if (result.changes === 1) return true;
+    const current = await transaction.get("SELECT payment_status FROM orders WHERE id = ?", [order.id]);
+    if (current?.payment_status === "paid") return false;
+    throw new Error("PAYMENT_STATE_CHANGED");
+  });
+  const updatedOrder = await db.get("SELECT * FROM orders WHERE id = ?", [order.id]);
+  const notification = wasPaid
+    ? await sendPaymentConfirmationEmail({
+      email: updatedOrder.customer_email,
+      customerName: updatedOrder.customer_name,
+      orderNumber: updatedOrder.order_number,
+      total: updatedOrder.total_pesewas / 100,
+    })
+    : { status: "already_sent", message: "Payment was already confirmed." };
+  return { order: await readPaymentOrder(updatedOrder), notification };
 }
 
 app.get("/api/health", (_request, response) => response.json({ status: "ok" }));
@@ -446,9 +533,10 @@ app.post("/api/order-tracking", orderLimiter, async (request, response) => {
   return response.json(await readTrackedOrder(order));
 });
 
-app.get("/api/payment-instructions", (_request, response) => response.json(paymentInstructions));
-
 app.post("/api/orders", orderLimiter, async (request, response) => {
+  if (!process.env.PAYSTACK_SECRET_KEY?.trim()) {
+    return response.status(503).json({ error: "Online payments are not configured yet. Please try again later." });
+  }
   const { customerName, customerEmail, phone, orderType, items } = request.body ?? {};
   if (
     !validText(customerName, 2, 80) ||
@@ -485,10 +573,10 @@ app.post("/api/orders", orderLimiter, async (request, response) => {
           WHERE id = ? AND available = TRUE AND (stock_quantity IS NULL OR stock_quantity > 0)
           FOR UPDATE
         `, [id]);
-      if (!item) throw new Error("MENU_ITEM_UNAVAILABLE");
-      if (item.stock_quantity !== null && item.stock_quantity < quantity) {
-        throw new Error("MENU_ITEM_STOCK_INSUFFICIENT");
-      }
+        if (!item) throw new Error("MENU_ITEM_UNAVAILABLE");
+        if (item.stock_quantity !== null && item.stock_quantity < quantity) {
+          throw new Error("MENU_ITEM_STOCK_INSUFFICIENT");
+        }
         resolvedItems.push({ item, quantity });
       }
       for (const { item, quantity } of resolvedItems) {
@@ -501,46 +589,85 @@ app.post("/api/orders", orderLimiter, async (request, response) => {
           if (result.changes !== 1) throw new Error("MENU_ITEM_STOCK_INSUFFICIENT");
         }
       }
-    const totalPesewas = resolvedItems.reduce(
-      (total, { item, quantity }) => total + item.price_pesewas * quantity,
-      0,
-    );
-    const orderNumber = `GH-${randomBytes(16).toString("hex").toUpperCase()}`;
-    const insertedOrder = await tx.run(`
-      INSERT INTO orders (order_number, customer_name, customer_email, phone, order_type, total_pesewas, status, payment_status)
-      VALUES (?, ?, ?, ?, ?, ?, 'awaiting_payment', 'pending')
-    `, [orderNumber, customerName.trim(), customerEmail.trim().toLowerCase(), phone.trim(), orderType, totalPesewas]);
-    for (const { item, quantity } of resolvedItems) {
-      await tx.run(`
-        INSERT INTO order_items (order_id, menu_item_id, item_name, unit_price_pesewas, quantity)
-        VALUES (?, ?, ?, ?, ?)
-      `, [insertedOrder.lastInsertRowid, item.id, item.name, item.price_pesewas, quantity]);
-    }
-    return {
-      orderNumber,
-      customerName: customerName.trim(),
-      customerEmail: customerEmail.trim().toLowerCase(),
-      phone: phone.trim(),
-      orderType,
-      total: totalPesewas / 100,
-      status: "awaiting_payment",
-      paymentStatus: "pending",
-      paymentInstructions,
-      createdAt: new Date().toISOString(),
-      items: resolvedItems.map(({ item, quantity }) => ({
-        name: item.name,
-        quantity,
-        unitPrice: item.price_pesewas / 100,
-      })),
-    };
+      const totalPesewas = resolvedItems.reduce(
+        (total, { item, quantity }) => total + item.price_pesewas * quantity,
+        0,
+      );
+      const orderNumber = `GH-${randomBytes(16).toString("hex").toUpperCase()}`;
+      const insertedOrder = await tx.run(`
+        INSERT INTO orders (order_number, customer_name, customer_email, phone, order_type, total_pesewas, status, payment_status, payment_reference)
+        VALUES (?, ?, ?, ?, ?, ?, 'awaiting_payment', 'pending', ?)
+      `, [orderNumber, customerName.trim(), customerEmail.trim().toLowerCase(), phone.trim(), orderType, totalPesewas, orderNumber]);
+      for (const { item, quantity } of resolvedItems) {
+        await tx.run(`
+          INSERT INTO order_items (order_id, menu_item_id, item_name, unit_price_pesewas, quantity)
+          VALUES (?, ?, ?, ?, ?)
+        `, [insertedOrder.lastInsertRowid, item.id, item.name, item.price_pesewas, quantity]);
+      }
+      return {
+        orderNumber,
+        customerName: customerName.trim(),
+        customerEmail: customerEmail.trim().toLowerCase(),
+        phone: phone.trim(),
+        orderType,
+        total: totalPesewas / 100,
+        status: "awaiting_payment",
+        paymentStatus: "pending",
+        reference: orderNumber,
+        createdAt: new Date().toISOString(),
+        items: resolvedItems.map(({ item, quantity }) => ({
+          name: item.name,
+          quantity,
+          unitPrice: item.price_pesewas / 100,
+        })),
+      };
     });
-    const notifications = await sendOrderNotifications(order);
-    return response.status(201).json({ ...order, notifications });
+    let checkout;
+    try {
+      checkout = await initializePaystackTransaction({
+        email: order.customerEmail,
+        amountPesewas: Math.round(order.total * 100),
+        reference: order.reference,
+        callbackUrl: paymentCallbackUrl(request),
+        metadata: { orderNumber: order.orderNumber },
+      });
+    } catch (error) {
+      console.error(`Paystack checkout initialization failed for ${order.orderNumber}: ${error.message}`);
+      return response.status(error.message === "PAYSTACK_NOT_CONFIGURED" ? 503 : 502).json({
+        error: "We saved the order but could not open secure payment checkout. Please contact the restaurant with your order number.",
+        orderNumber: order.orderNumber,
+      });
+    }
+    const orderWithCheckout = { ...order, paymentUrl: checkout.authorizationUrl };
+    const notifications = await sendOrderNotifications(orderWithCheckout);
+    return response.status(201).json({ ...orderWithCheckout, notifications });
   } catch (error) {
     if (["MENU_ITEM_UNAVAILABLE", "MENU_ITEM_STOCK_INSUFFICIENT"].includes(error.message)) {
       return response.status(409).json({ error: "A selected menu item is unavailable or there isn't enough stock. Refresh the menu and try again." });
     }
     throw error;
+  }
+});
+
+app.post("/api/payments/verify", orderLimiter, async (request, response) => {
+  const reference = request.body?.reference;
+  if (typeof reference !== "string" || !/^[A-Za-z0-9._-]{8,120}$/.test(reference)) {
+    return response.status(400).json({ error: "Enter a valid Paystack transaction reference." });
+  }
+  try {
+    return response.json(await verifyAndRecordPaystackPayment(reference));
+  } catch (error) {
+    if (error.message === "PAYMENT_ORDER_NOT_FOUND") {
+      return response.status(404).json({ error: "No order was found for this payment reference." });
+    }
+    if (error.message === "PAYMENT_NOT_CONFIRMED") {
+      return response.status(402).json({ error: "Paystack has not confirmed successful payment for this order." });
+    }
+    if (error.message === "PAYMENT_STATE_CHANGED") {
+      return response.status(409).json({ error: "The payment status changed. Refresh the order and try again." });
+    }
+    console.error(`Paystack payment verification failed for ${reference}: ${error.message}`);
+    return response.status(502).json({ error: "We could not verify payment with Paystack right now. Please retry shortly." });
   }
 });
 
@@ -658,31 +785,56 @@ app.get("/api/manager/activities", async (request, response) => {
   const requestedLimit = Number(request.query.limit);
   const limit = Number.isInteger(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 200)) : 100;
   const rows = await db.all(`
-    SELECT id, actor_name AS "actorName", actor_email AS "actorEmail", action, entity, entity_id AS "entityId", details, created_at AS "createdAt"
+    SELECT id, actor_name, actor_email, action, entity, entity_id, details, created_at
     FROM activity_logs
     ORDER BY id DESC
     LIMIT ?
   `, [limit]);
-  return response.json(rows);
+  return response.json(rows.map((row) => ({
+    id: row.id,
+    actorName: row.actor_name,
+    actorEmail: row.actor_email,
+    action: row.action,
+    entity: row.entity,
+    entityId: row.entity_id,
+    details: row.details,
+    createdAt: row.created_at,
+  })));
 });
 
 app.get("/api/manager/staff", async (_request, response) => {
   const users = (await db.all(`
-    SELECT id, name, email, role, active, created_at AS "createdAt"
+    SELECT id, name, email, role, active, created_at
     FROM users WHERE role IN ('staff', 'manager') ORDER BY role, name
-  `)).map((user) => ({ ...user, active: Boolean(user.active) }));
+  `)).map((user) => ({
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    active: Boolean(user.active),
+    createdAt: user.created_at,
+  }));
   return response.json(users);
 });
 
 app.get("/api/manager/applications", async (_request, response) => {
   const applications = await db.all(`
-    SELECT id, first_name AS "firstName", last_name AS "lastName", email, phone,
-      desired_position AS "desiredPosition", message, resume_name AS "resumeName",
-      created_at AS "createdAt"
+    SELECT id, first_name, last_name, email, phone,
+      desired_position, message, resume_name, created_at
     FROM job_applications
     ORDER BY id DESC
   `);
-  return response.json(applications);
+  return response.json(applications.map((application) => ({
+    id: application.id,
+    firstName: application.first_name,
+    lastName: application.last_name,
+    email: application.email,
+    phone: application.phone,
+    desiredPosition: application.desired_position,
+    message: application.message,
+    resumeName: application.resume_name,
+    createdAt: application.created_at,
+  })));
 });
 
 app.get("/api/manager/applications/:id/resume", async (request, response) => {
@@ -691,14 +843,14 @@ app.get("/api/manager/applications/:id/resume", async (request, response) => {
     return response.status(400).json({ error: "Invalid application." });
   }
   const application = await db.get(`
-    SELECT resume_name AS "resumeName", resume_type AS "resumeType", resume_data AS "resumeData"
+    SELECT resume_name, resume_type, resume_data
     FROM job_applications WHERE id = ?
   `, [applicationId]);
   if (!application) return response.status(404).json({ error: "Application not found." });
-  response.set("Content-Type", application.resumeType);
-  response.set("Content-Disposition", `attachment; filename="${application.resumeName}"`);
+  response.set("Content-Type", application.resume_type);
+  response.set("Content-Disposition", `attachment; filename="${application.resume_name}"`);
   response.set("X-Content-Type-Options", "nosniff");
-  return response.send(application.resumeData);
+  return response.send(application.resume_data);
 });
 
 app.post("/api/manager/staff", async (request, response) => {
@@ -721,13 +873,21 @@ app.post("/api/manager/staff", async (request, response) => {
       VALUES (?, ?, ?, 'staff', FALSE)
     `, [name.trim(), email.trim().toLowerCase(), passwordHash]);
     const staff = await db.get(`
-      SELECT id, name, email, role, active, created_at AS "createdAt" FROM users WHERE id = ?
+      SELECT id, name, email, role, active, created_at FROM users WHERE id = ?
     `, [result.lastInsertRowid]);
     const token = await createEmailAuthToken(staff.id, "verify_email");
     const verificationEmail = await sendVerificationEmail({ email: staff.email, name: staff.name, token });
-    return response.status(201).json({ ...staff, active: Boolean(staff.active), verificationEmail });
+    return response.status(201).json({
+      id: staff.id,
+      name: staff.name,
+      email: staff.email,
+      role: staff.role,
+      active: Boolean(staff.active),
+      createdAt: staff.created_at,
+      verificationEmail,
+    });
   } catch (error) {
-    if (error.code === "23505") return response.status(409).json({ error: "An account with this email already exists." });
+    if (["23505", "ER_DUP_ENTRY"].includes(error.code)) return response.status(409).json({ error: "An account with this email already exists." });
     throw error;
   }
 });
@@ -741,10 +901,17 @@ app.patch("/api/manager/staff/:id", async (request, response) => {
   const result = await db.run("UPDATE users SET active = ? WHERE id = ? AND role = 'staff'", [active, staffId]);
   if (result.changes === 0) return response.status(404).json({ error: "Staff account not found." });
   const staff = await db.get(`
-    SELECT id, name, email, role, active, created_at AS "createdAt" FROM users WHERE id = ?
+    SELECT id, name, email, role, active, created_at FROM users WHERE id = ?
   `, [staffId]);
   if (!active) await db.run("DELETE FROM sessions WHERE user_id = ?", [staffId]);
-  return response.json({ ...staff, active: Boolean(staff.active) });
+  return response.json({
+    id: staff.id,
+    name: staff.name,
+    email: staff.email,
+    role: staff.role,
+    active: Boolean(staff.active),
+    createdAt: staff.created_at,
+  });
 });
 
 app.get("/api/staff/summary", async (_request, response) => {
@@ -779,7 +946,7 @@ app.post("/api/staff/tables", async (request, response) => {
     const table = await db.run("INSERT INTO restaurant_tables (name, seats) VALUES (?, ?)", [name.trim(), seats]);
     return response.status(201).json(await db.get("SELECT * FROM restaurant_tables WHERE id = ?", [table.lastInsertRowid]));
   } catch (error) {
-    if (error.code === "23505") return response.status(409).json({ error: "That table name is already in use." });
+    if (["23505", "ER_DUP_ENTRY"].includes(error.code)) return response.status(409).json({ error: "That table name is already in use." });
     throw error;
   }
 });
@@ -1033,39 +1200,11 @@ app.patch("/api/staff/orders/:id", async (request, response) => {
   const existingOrder = await db.get("SELECT payment_status FROM orders WHERE id = ?", [orderId]);
   if (!existingOrder) return response.status(404).json({ error: "Order not found." });
   if (existingOrder.payment_status !== "paid") {
-    return response.status(409).json({ error: "Confirm the MoMo payment before updating order preparation status." });
+    return response.status(409).json({ error: "Verify the Paystack payment before updating order preparation status." });
   }
   const result = await db.run("UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [status, orderId]);
   if (result.changes === 0) return response.status(404).json({ error: "Order not found." });
   return response.json((await readOrders()).find((order) => order.id === orderId));
-});
-
-app.patch("/api/staff/orders/:id/payment", async (request, response) => {
-  const orderId = Number(request.params.id);
-  if (!Number.isInteger(orderId) || request.body?.paymentStatus !== "paid") {
-    return response.status(400).json({ error: "Confirm that the MoMo payment was received." });
-  }
-  const order = await db.get("SELECT * FROM orders WHERE id = ?", [orderId]);
-  if (!order) return response.status(404).json({ error: "Order not found." });
-  if (order.payment_status === "paid") {
-    return response.status(409).json({ error: "This order's payment has already been confirmed." });
-  }
-  const updated = await db.run(`
-    UPDATE orders
-    SET payment_status = 'paid', status = 'received', updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND payment_status = 'pending'
-  `, [orderId]);
-  if (updated.changes === 0) return response.status(409).json({ error: "Payment status changed. Refresh orders and try again." });
-  const notification = await sendPaymentConfirmationEmail({
-    email: order.customer_email,
-    customerName: order.customer_name,
-    orderNumber: order.order_number,
-    total: order.total_pesewas / 100,
-  });
-  return response.json({
-    ...(await readOrders()).find((item) => item.id === orderId),
-    notification,
-  });
 });
 
 app.use("/api", (_request, response) => response.status(404).json({ error: "API route not found." }));

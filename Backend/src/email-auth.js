@@ -34,14 +34,19 @@ export async function consumeEmailAuthToken(token, purpose, updateUser) {
 
   const now = new Date().toISOString();
   return db.transaction(async (transaction) => {
+    const tokenRecord = await transaction.get(`
+      SELECT user_id FROM email_auth_tokens
+      WHERE token_hash = ? AND purpose = ? AND used_at IS NULL AND expires_at > ?
+      FOR UPDATE
+    `, [hashToken(token), purpose, now]);
+    if (!tokenRecord) return null;
     const consumed = await transaction.run(`
       UPDATE email_auth_tokens SET used_at = ?
       WHERE token_hash = ? AND purpose = ? AND used_at IS NULL AND expires_at > ?
-      RETURNING user_id
     `, [now, hashToken(token), purpose, now]);
-    if (!consumed.row) return null;
+    if (consumed.changes !== 1) return null;
 
-    const user = await transaction.get("SELECT id, email, active FROM users WHERE id = ?", [consumed.row.user_id]);
+    const user = await transaction.get("SELECT id, email, active FROM users WHERE id = ?", [tokenRecord.user_id]);
     if (!user || !user.active) return null;
     await updateUser(transaction, user, now);
     await transaction.run(`

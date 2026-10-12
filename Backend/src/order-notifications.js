@@ -1,11 +1,9 @@
 import nodemailer from "nodemailer";
+import { randomBytes } from "node:crypto";
 
 const resendEndpoint = "https://api.resend.com/emails";
-const paymentInstructions = {
-  method: "MoMo",
-  number: "0545567500",
-  accountName: "Collins Oduro",
-};
+const gmailTokenEndpoint = "https://oauth2.googleapis.com/token";
+const gmailSendEndpoint = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
 const ghanaCedis = new Intl.NumberFormat("en-GH", { style: "currency", currency: "GHS" });
 const formatMoney = (amount) => ghanaCedis.format(amount).replace("GHS", "GH₵");
 const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({
@@ -23,12 +21,160 @@ function configurationStatus(values, required, label) {
   return null;
 }
 
+let cachedGmailAccessToken = "";
+let cachedGmailTokenExpiry = 0;
+
+function encodeMimeHeader(value) {
+  const safeValue = String(value).replace(/[\r\n]/g, " ").trim();
+  return /^[\x20-\x7e]*$/.test(safeValue)
+    ? safeValue
+    : `=?UTF-8?B?${Buffer.from(safeValue).toString("base64")}?=`;
+}
+
+function encodeMimeBody(value) {
+  return Buffer.from(String(value)).toString("base64").replace(/.{1,76}/g, "$&\r\n").trim();
+}
+
+async function getGmailAccessToken(reference) {
+  if (cachedGmailAccessToken && Date.now() < cachedGmailTokenExpiry - 60_000) {
+    return cachedGmailAccessToken;
+  }
+  const response = await fetch(gmailTokenEndpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: process.env.GMAIL_CLIENT_ID,
+      client_secret: process.env.GMAIL_CLIENT_SECRET,
+      refresh_token: process.env.GMAIL_REFRESH_TOKEN,
+      grant_type: "refresh_token",
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || typeof result.access_token !== "string") {
+    throw new Error("GMAIL_AUTH_FAILED");
+  }
+  cachedGmailAccessToken = result.access_token;
+  cachedGmailTokenExpiry = Date.now() + (Number(result.expires_in) || 3600) * 1000;
+  return cachedGmailAccessToken;
+}
+
+function createRawEmail({ to, from, subject, text, html, replyTo, attachments }) {
+  const boundary = `orderpulse_${randomBytes(12).toString("hex")}`;
+  const headers = [
+    `From: ${String(from).replace(/[\r\n]/g, " ")}`,
+    `To: ${String(to).replace(/[\r\n]/g, " ")}`,
+    `Subject: ${encodeMimeHeader(subject)}`,
+    ...(replyTo ? [`Reply-To: ${String(replyTo).replace(/[\r\n]/g, " ")}`] : []),
+    "MIME-Version: 1.0",
+  ];
+  const alternativeBoundary = `${boundary}_alternative`;
+  const bodyParts = attachments?.length
+    ? [
+      `--${boundary}`,
+      `Content-Type: multipart/alternative; boundary="${alternativeBoundary}"`,
+      "",
+      `--${alternativeBoundary}`,
+      "Content-Type: text/plain; charset=UTF-8",
+      "Content-Transfer-Encoding: base64",
+      "",
+      encodeMimeBody(text),
+      `--${alternativeBoundary}`,
+      "Content-Type: text/html; charset=UTF-8",
+      "Content-Transfer-Encoding: base64",
+      "",
+      encodeMimeBody(html),
+      `--${alternativeBoundary}--`,
+      ...attachments.flatMap((attachment) => [
+        `--${boundary}`,
+        `Content-Type: ${String(attachment.contentType || "application/octet-stream").replace(/[\r\n]/g, "")}`,
+        `Content-Disposition: attachment; filename="${String(attachment.filename).replace(/["\r\n]/g, "_")}"`,
+        "Content-Transfer-Encoding: base64",
+        "",
+        encodeMimeBody(attachment.content),
+      ]),
+      `--${boundary}--`,
+    ].join("\r\n")
+    : [
+      `--${alternativeBoundary}`,
+      "Content-Type: text/plain; charset=UTF-8",
+      "Content-Transfer-Encoding: base64",
+      "",
+      encodeMimeBody(text),
+      `--${alternativeBoundary}`,
+      "Content-Type: text/html; charset=UTF-8",
+      "Content-Transfer-Encoding: base64",
+      "",
+      encodeMimeBody(html),
+      `--${alternativeBoundary}--`,
+    ].join("\r\n");
+
+  if (attachments?.length) headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+  else headers.push(`Content-Type: multipart/alternative; boundary="${alternativeBoundary}"`);
+  return Buffer.from(`${headers.join("\r\n")}\r\n\r\n${bodyParts}`)
+    .toString("base64url");
+}
+
+async function sendGmailEmail({ to, from, subject, text, html, reference, replyTo, attachments }) {
+  const config = {
+    GMAIL_USER: process.env.GMAIL_USER,
+    GMAIL_CLIENT_ID: process.env.GMAIL_CLIENT_ID,
+    GMAIL_CLIENT_SECRET: process.env.GMAIL_CLIENT_SECRET,
+    GMAIL_REFRESH_TOKEN: process.env.GMAIL_REFRESH_TOKEN,
+  };
+  const notReady = configurationStatus(config, Object.keys(config), "Gmail API");
+  if (notReady) {
+    console.error(`Email delivery unavailable for ${reference}: ${notReady.message}`);
+    return notReady;
+  }
+  try {
+    const accessToken = await getGmailAccessToken(reference);
+    const raw = createRawEmail({
+      to,
+      from: from || config.GMAIL_USER,
+      subject,
+      text,
+      html,
+      replyTo,
+      attachments,
+    });
+    const response = await fetch(gmailSendEndpoint, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ raw }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) {
+      console.error(`Email delivery failed for ${reference} via Gmail API: HTTP ${response.status}`);
+      return { status: "failed", message: "Email could not be sent. Check the Gmail API OAuth settings and server logs." };
+    }
+    return { status: "sent", message: "Email sent." };
+  } catch (error) {
+    cachedGmailAccessToken = "";
+    cachedGmailTokenExpiry = 0;
+    console.error(`Email delivery failed for ${reference} via Gmail API:`, error.message);
+    return { status: "failed", message: "Email could not be sent. Check the Gmail API OAuth settings and server logs." };
+  }
+}
+
 async function sendEmail({ to, subject, text, html, reference, replyTo, attachments }) {
   if (typeof to !== "string" || !to.trim()) {
     return { status: "no_recipient", message: "No email address is available for this notification." };
   }
 
   const from = process.env.EMAIL_FROM || process.env.SMTP_FROM;
+  if (
+    process.env.GMAIL_USER ||
+    process.env.GMAIL_CLIENT_ID ||
+    process.env.GMAIL_CLIENT_SECRET ||
+    process.env.GMAIL_REFRESH_TOKEN
+  ) {
+    return sendGmailEmail({ to, from: process.env.GMAIL_USER, subject, text, html, reference, replyTo, attachments });
+  }
+
   if (process.env.RESEND_API_KEY) {
     if (!from) {
       const result = { status: "failed", message: "EMAIL_FROM must be set to a verified sender address." };
@@ -209,9 +355,8 @@ export async function sendOrderNotifications(order) {
     `Total: ${formatMoney(order.total)}`,
     `Status: ${order.status}`,
     "",
-    "MoMo payment:",
-    `Send ${formatMoney(order.total)} to ${paymentInstructions.number} (${paymentInstructions.accountName}).`,
-    `Use order number ${order.orderNumber} as the payment reference. Your order stays pending until staff confirm receipt.`,
+    "Complete payment securely through Paystack:",
+    order.paymentUrl || "Return to the OrderPulse checkout page to continue payment.",
     "",
     "Thank you for choosing OrderPulse.",
   ];
@@ -223,7 +368,7 @@ export async function sendOrderNotifications(order) {
       to: order.customerEmail,
       subject: `OrderPulse order ${order.orderNumber}`,
       text: lines.join("\n"),
-      html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(order.customerName)},</p><p>We received order <strong>${escapeHtml(order.orderNumber)}</strong> (${order.orderType === "dine-in" ? "Dine in" : "Pickup"}).</p><ul>${htmlItems}</ul><p><strong>Total: ${formatMoney(order.total)}</strong></p><p>Status: ${escapeHtml(order.status)}</p><h2>Pay by MoMo</h2><p>Send <strong>${formatMoney(order.total)}</strong> to <strong>${paymentInstructions.number}</strong> (<strong>${escapeHtml(paymentInstructions.accountName)}</strong>). Use order number <strong>${escapeHtml(order.orderNumber)}</strong> as the payment reference. Your order stays pending until staff confirm receipt.</p><p>Thank you for choosing OrderPulse.</p></div>`,
+      html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse · Ahodwo, Kumasi</h1><p>Hello ${escapeHtml(order.customerName)},</p><p>We received order <strong>${escapeHtml(order.orderNumber)}</strong> (${order.orderType === "dine-in" ? "Dine in" : "Pickup"}).</p><ul>${htmlItems}</ul><p><strong>Total: ${formatMoney(order.total)}</strong></p><p>Status: ${escapeHtml(order.status)}</p><h2>Complete your payment</h2><p><a href="${escapeHtml(order.paymentUrl || "#")}">Continue to secure Paystack checkout</a></p><p>Your order will be released to the kitchen once payment is verified.</p><p>Thank you for choosing OrderPulse.</p></div>`,
       reference: `order ${order.orderNumber}`,
     }),
     sendStaffEmail({
@@ -239,7 +384,7 @@ export async function sendOrderNotifications(order) {
         "",
         `Total: ${formatMoney(order.total)}`,
         "",
-        `Payment: MoMo ${paymentInstructions.number} (${paymentInstructions.accountName})`,
+        "Payment: Paystack",
         `Payment status: ${order.paymentStatus || "pending"}`,
       ].join("\n"),
       html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>New restaurant order</h1><p><strong>Order:</strong> ${escapeHtml(order.orderNumber)} (${order.orderType === "dine-in" ? "Dine in" : "Pickup"})</p><p><strong>Customer:</strong> ${escapeHtml(order.customerName)}<br><strong>Email:</strong> ${escapeHtml(order.customerEmail)}<br><strong>Phone:</strong> ${escapeHtml(order.phone)}</p><ul>${htmlItems}</ul><p><strong>Total: ${formatMoney(order.total)}</strong></p></div>`,
@@ -262,9 +407,9 @@ export async function sendReservationNotifications(reservation, { notifyStaff = 
     reservation.tableName ? `Table: ${reservation.tableName}` : null,
     reservation.notes ? `Notes: ${reservation.notes}` : null,
     "",
-    "OrderPulse · Accra",
+    "OrderPulse · Ahodwo, Kumasi",
   ].filter((line) => line !== null).join("\n");
-  const html = `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(reservation.customerName)},</p><p>${escapeHtml(statusMessage)}</p><p><strong>Date:</strong> ${escapeHtml(reservation.date)} at ${escapeHtml(reservation.time)}<br><strong>Guests:</strong> ${reservation.partySize}${reservation.tableName ? `<br><strong>Table:</strong> ${escapeHtml(reservation.tableName)}` : ""}</p>${reservation.notes ? `<p><strong>Your note:</strong> ${escapeHtml(reservation.notes)}</p>` : ""}<p>OrderPulse · Accra</p></div>`;
+  const html = `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(reservation.customerName)},</p><p>${escapeHtml(statusMessage)}</p><p><strong>Date:</strong> ${escapeHtml(reservation.date)} at ${escapeHtml(reservation.time)}<br><strong>Guests:</strong> ${reservation.partySize}${reservation.tableName ? `<br><strong>Table:</strong> ${escapeHtml(reservation.tableName)}` : ""}</p>${reservation.notes ? `<p><strong>Your note:</strong> ${escapeHtml(reservation.notes)}</p>` : ""}<p>OrderPulse · Ahodwo, Kumasi</p></div>`;
   const reference = `reservation ${reservation.id}`;
   const notifications = [
     sendEmail({
@@ -309,9 +454,9 @@ export async function sendCareerApplicationNotifications(application) {
       `Your application reference is ${application.applicationNumber}.`,
       "Our team will review your application and contact you if we need more information.",
       "",
-      "OrderPulse · Accra",
+      "OrderPulse · Ahodwo, Kumasi",
     ].join("\n"),
-    html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(application.firstName)},</p><p>We received your application for the <strong>${escapeHtml(application.desiredPosition)}</strong> position.</p><p>Your application reference is <strong>${escapeHtml(application.applicationNumber)}</strong>.</p><p>Our team will review your application and contact you if we need more information.</p><p>OrderPulse · Accra</p></div>`,
+    html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(application.firstName)},</p><p>We received your application for the <strong>${escapeHtml(application.desiredPosition)}</strong> position.</p><p>Your application reference is <strong>${escapeHtml(application.applicationNumber)}</strong>.</p><p>Our team will review your application and contact you if we need more information.</p><p>OrderPulse · Ahodwo, Kumasi</p></div>`,
     reference,
   });
 

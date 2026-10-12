@@ -13,6 +13,10 @@ const environmentKeys = [
   "SMTP_USER",
   "SMTP_PASS",
   "SMTP_FROM",
+  "GMAIL_USER",
+  "GMAIL_CLIENT_ID",
+  "GMAIL_CLIENT_SECRET",
+  "GMAIL_REFRESH_TOKEN",
   "JOB_APPLICATION_NOTIFICATION_EMAIL",
   "PUBLIC_APP_URL",
 ];
@@ -46,7 +50,6 @@ test("sends verification emails through Resend's HTTPS API", async () => {
     name: "Ama Mensah",
     token: "verify-token",
   });
-
   assert.equal(result.status, "sent");
   assert.equal(requestUrl, "https://api.resend.com/emails");
   assert.equal(requestOptions.headers.Authorization, "Bearer test-resend-key");
@@ -54,6 +57,44 @@ test("sends verification emails through Resend's HTTPS API", async () => {
   assert.equal(payload.from, "OrderPulse <orders@example.com>");
   assert.deepEqual(payload.to, ["customer@example.com"]);
   assert.match(payload.text, /https:\/\/orderpulse\.example\.com\/\?verifyEmail=verify-token/);
+});
+
+test("sends verification email through the Gmail API without requiring a custom sender domain", async () => {
+  process.env.RESEND_API_KEY = "";
+  process.env.EMAIL_FROM = "";
+  process.env.GMAIL_USER = "orderpulse.sender@gmail.com";
+  process.env.GMAIL_CLIENT_ID = "test-client-id";
+  process.env.GMAIL_CLIENT_SECRET = "test-client-secret";
+  process.env.GMAIL_REFRESH_TOKEN = "test-refresh-token";
+  process.env.PUBLIC_APP_URL = "https://orderpulse.example.com";
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, options });
+    if (url === "https://oauth2.googleapis.com/token") {
+      return new Response(JSON.stringify({ access_token: "test-access-token", expires_in: 3600 }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ id: "gmail-message-id" }), { status: 200 });
+  };
+
+  const result = await sendVerificationEmail({
+    email: "customer@example.com",
+    name: "Ama Mensah",
+    token: "verify-token",
+  });
+
+  assert.equal(result.status, "sent");
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].url, "https://oauth2.googleapis.com/token");
+  assert.equal(requests[1].url, "https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
+  const rawEmail = Buffer.from(JSON.parse(requests[1].options.body).raw, "base64url").toString("utf8");
+  assert.match(rawEmail, /From: orderpulse\.sender@gmail\.com/);
+  assert.match(rawEmail, /To: customer@example\.com/);
+  assert.match(rawEmail, /Content-Type: multipart\/alternative/);
+  const encodedText = rawEmail.match(
+    /Content-Type: text\/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/,
+  )?.[1].replace(/\r\n/g, "");
+  assert.ok(encodedText);
+  assert.match(Buffer.from(encodedText, "base64").toString("utf8"), /verifyEmail=verify-token/);
 });
 
 test("sends applicant CV attachments through Resend as base64 data", async () => {

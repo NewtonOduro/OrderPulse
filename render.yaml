@@ -10,5 +10,29 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: DATABASE_URL
+      - key: MYSQL_URL
+        sync: false
+      - key: MYSQL_SSL
+        value: "true"
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: PUBLIC_APP_URL
+        value: https://orderpulse-g8gx.onrender.com
+      - key: ADMIN_NAME
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: GMAIL_USER
+        sync: false
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false
+      - key: STAFF_NOTIFICATION_EMAIL
+        sync: false
+      - key: JOB_APPLICATION_NOTIFICATION_EMAIL
         sync: false

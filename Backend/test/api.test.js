@@ -1,6 +1,6 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { existsSync } from "node:fs";
 import bcrypt from "bcryptjs";
 
@@ -13,11 +13,48 @@ for (const key of [
   "SMTP_FROM",
   "RESEND_API_KEY",
   "EMAIL_FROM",
+  "GMAIL_USER",
+  "GMAIL_CLIENT_ID",
+  "GMAIL_CLIENT_SECRET",
+  "GMAIL_REFRESH_TOKEN",
   "STAFF_NOTIFICATION_EMAIL",
   "JOB_APPLICATION_NOTIFICATION_EMAIL",
 ]) {
   process.env[key] = "";
 }
+process.env.PAYSTACK_SECRET_KEY = "test-paystack-secret";
+const nativeFetch = globalThis.fetch;
+const paystackInitializations = [];
+globalThis.fetch = async (input, options = {}) => {
+  const url = String(input);
+  if (url.startsWith("https://api.paystack.co/transaction/initialize")) {
+    const payload = JSON.parse(options.body);
+    paystackInitializations.push(payload);
+    return new Response(JSON.stringify({
+      status: true,
+      data: {
+        authorization_url: `https://checkout.paystack.com/${payload.reference}`,
+        reference: payload.reference,
+      },
+    }), { status: 200 });
+  }
+  if (url.startsWith("https://api.paystack.co/transaction/verify/")) {
+    const reference = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
+    const order = await db.get("SELECT * FROM orders WHERE payment_reference = ?", [reference]);
+    if (!order) return new Response(JSON.stringify({ status: false, message: "Not found" }), { status: 404 });
+    return new Response(JSON.stringify({
+      status: true,
+      data: {
+        status: "success",
+        currency: "GHS",
+        amount: order.total_pesewas,
+        reference,
+        customer: { email: order.customer_email },
+      },
+    }), { status: 200 });
+  }
+  return nativeFetch(input, options);
+};
 const { createEmailAuthToken } = await import("../src/email-auth.js");
 const { app } = await import("../src/app.js");
 const { db } = await import("../src/database.js");
@@ -87,13 +124,6 @@ test("serves the production frontend and client routes when the frontend is buil
 });
 
 test("orders are validated and persisted with a cedi total", async () => {
-  const instructionsResponse = await fetch(`${baseUrl}/api/payment-instructions`);
-  assert.equal(instructionsResponse.status, 200);
-  assert.deepEqual(await instructionsResponse.json(), {
-    method: "MoMo",
-    number: "0545567500",
-    accountName: "Collins Oduro",
-  });
   const [firstItem] = await (await fetch(`${baseUrl}/api/menu`)).json();
   const response = await fetch(`${baseUrl}/api/orders`, {
     method: "POST",
@@ -114,11 +144,14 @@ test("orders are validated and persisted with a cedi total", async () => {
   assert.equal(result.items[0].name, firstItem.name);
   assert.equal(result.status, "awaiting_payment");
   assert.equal(result.paymentStatus, "pending");
-  assert.deepEqual(result.paymentInstructions, {
-    method: "MoMo",
-    number: "0545567500",
-    accountName: "Collins Oduro",
-  });
+  assert.equal(result.paymentUrl, `https://checkout.paystack.com/${result.orderNumber}`);
+  assert.equal(result.reference, result.orderNumber);
+  const initialization = paystackInitializations.find((entry) => entry.reference === result.reference);
+  assert.equal(initialization.amount, Math.round(result.total * 100));
+  assert.equal(initialization.currency, "GHS");
+  assert.equal(initialization.email, "ama@example.com");
+  assert.equal(initialization.metadata.orderNumber, result.orderNumber);
+  assert.match(initialization.callback_url, /[?]payment=paystack$/);
   assert.equal(result.notifications.email.status, "not_configured");
   assert.equal(result.notifications.staffEmail.status, "no_recipient");
 
@@ -153,26 +186,35 @@ test("orders are validated and persisted with a cedi total", async () => {
   });
   assert.equal(prematurePreparation.status, 409);
 
-  const paymentConfirmation = await fetch(`${baseUrl}/api/staff/orders/${trackedOrder.id}/payment`, {
-    method: "PATCH",
+  const paymentConfirmation = await fetch(`${baseUrl}/api/payments/verify`, {
+    method: "POST",
     headers: { "content-type": "application/json", cookie: managerCookie },
-    body: JSON.stringify({ paymentStatus: "paid" }),
+    body: JSON.stringify({ reference: result.reference }),
   });
-  const paidOrder = await paymentConfirmation.json();
+  const paymentResult = await paymentConfirmation.json();
+  const paidOrder = paymentResult.order;
   assert.equal(paymentConfirmation.status, 200);
   assert.equal(paidOrder.paymentStatus, "paid");
   assert.equal(paidOrder.status, "received");
-  assert.equal(paidOrder.notification.status, "not_configured");
+  assert.equal(paymentResult.notification.status, "not_configured");
   const confirmedSalesSummary = await fetch(`${baseUrl}/api/manager/summary`, {
     headers: { cookie: managerCookie },
   });
   assert.equal((await confirmedSalesSummary.json()).salesToday, result.total);
-  const duplicatePaymentConfirmation = await fetch(`${baseUrl}/api/staff/orders/${trackedOrder.id}/payment`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json", cookie: managerCookie },
-    body: JSON.stringify({ paymentStatus: "paid" }),
+  const duplicatePaymentConfirmation = await fetch(`${baseUrl}/api/payments/verify`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ reference: result.reference }),
   });
-  assert.equal(duplicatePaymentConfirmation.status, 409);
+  assert.equal(duplicatePaymentConfirmation.status, 200);
+  assert.equal((await duplicatePaymentConfirmation.json()).notification.status, "already_sent");
+
+  const invalidReference = await fetch(`${baseUrl}/api/payments/verify`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ reference: "UNKNOWN-REFERENCE" }),
+  });
+  assert.equal(invalidReference.status, 404);
 
   for (const status of ["preparing", "ready", "completed"]) {
     const update = await fetch(`${baseUrl}/api/staff/orders/${trackedOrder.id}`, {
@@ -186,6 +228,42 @@ test("orders are validated and persisted with a cedi total", async () => {
     assert.equal(refreshedOrder.status, status);
     assert.equal(refreshedOrder.paymentStatus, "paid");
   }
+});
+
+test("Paystack webhook requires a valid signature and verifies payment before updating an order", async () => {
+  const [firstItem] = await (await fetch(`${baseUrl}/api/menu`)).json();
+  const orderResponse = await fetch(`${baseUrl}/api/orders`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      customerName: "Webhook Guest",
+      customerEmail: "webhook@example.com",
+      phone: "0240000011",
+      orderType: "pickup",
+      items: [{ id: firstItem.id, quantity: 1 }],
+    }),
+  });
+  const order = await orderResponse.json();
+  assert.equal(orderResponse.status, 201);
+
+  const rawBody = JSON.stringify({ event: "charge.success", data: { reference: order.reference } });
+  const invalidSignature = await fetch(`${baseUrl}/api/paystack/webhook`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-paystack-signature": "bad-signature" },
+    body: rawBody,
+  });
+  assert.equal(invalidSignature.status, 401);
+
+  const signature = createHmac("sha512", process.env.PAYSTACK_SECRET_KEY).update(rawBody).digest("hex");
+  const webhook = await fetch(`${baseUrl}/api/paystack/webhook`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-paystack-signature": signature },
+    body: rawBody,
+  });
+  assert.equal(webhook.status, 200);
+  const storedOrder = await db.get("SELECT payment_status, status FROM orders WHERE order_number = ?", [order.orderNumber]);
+  assert.equal(storedOrder.payment_status, "paid");
+  assert.equal(storedOrder.status, "received");
 });
 
 test("customers must create an account or sign in before reserving", async () => {

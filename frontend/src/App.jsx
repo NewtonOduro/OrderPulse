@@ -6,6 +6,7 @@ import {
   ChevronDown,
   CircleUserRound,
   Clock3,
+  Download,
   Leaf,
   MapPin,
   Menu as MenuIcon,
@@ -19,6 +20,7 @@ import {
 import AuthDialog from "./AuthDialog.jsx";
 import StaffDashboard from "./StaffDashboard.jsx";
 import { beverageGroups, beverageSubcategories, menuCategories } from "./menu-categories.js";
+import { downloadReceiptPdf } from "./receipt-pdf.js";
 
 const categories = ["All", ...menuCategories];
 const sectionOrder = menuCategories;
@@ -105,11 +107,6 @@ function money(amount) {
   return ghanaCurrency.format(amount).replace("GHS", "GH₵");
 }
 
-const momoPaymentInstructions = {
-  number: "0545567500",
-  accountName: "Collins Oduro",
-};
-
 function handleMenuImageError(event) {
   event.currentTarget.onerror = null;
   event.currentTarget.src = "/images/red-red.jpg";
@@ -132,6 +129,9 @@ function App() {
   const [bookingNotifications, setBookingNotifications] = useState(null);
   const [orderMessage, setOrderMessage] = useState("");
   const [orderReceipt, setOrderReceipt] = useState(null);
+  const [paymentCallback, setPaymentCallback] = useState(() =>
+    new URLSearchParams(window.location.search).get("payment") === "paystack",
+  );
   const [busy, setBusy] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [staffMode, setStaffMode] = useState(false);
@@ -202,6 +202,60 @@ function App() {
         if (user?.role === "customer") setCustomerUser(user);
       })
       .catch((error) => setMenuError(error.message));
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const reference = params.get("reference") || params.get("trxref");
+    if (params.get("payment") !== "paystack") return undefined;
+    setPaymentCallback(true);
+    setCheckoutOpen(true);
+    setOrderMessage("Checking your payment with Paystack…");
+    if (!reference) {
+      setOrderMessage("We could not find the Paystack reference. Check your order status or contact the restaurant.");
+      return undefined;
+    }
+
+    let active = true;
+    fetch("/api/payments/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reference }),
+    })
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "We could not verify your payment.");
+        return result;
+      })
+      .then((result) => {
+        if (!active) return;
+        const receipt = {
+          ...result.order,
+          notifications: {
+            email: {
+              message: result.notification?.message || "Your receipt is ready.",
+            },
+          },
+        };
+        setOrderReceipt(receipt);
+        setTrackingOrder(receipt);
+        setOrderMessage("");
+      })
+      .catch((error) => {
+        if (active) setOrderMessage(error.message);
+      })
+      .finally(() => {
+        if (active) {
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete("payment");
+          cleanUrl.searchParams.delete("reference");
+          cleanUrl.searchParams.delete("trxref");
+          window.history.replaceState({}, "", `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+        }
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -376,7 +430,7 @@ function App() {
     <section className="menu-page-content mx-auto max-w-7xl px-5 py-12 md:px-10 md:py-16">
       <div className="menu-page-heading">
         <a href="/" onClick={(event) => navigate(event, "/")} className="menu-back-link"><ArrowRight size={15} /> Back to home</a>
-        <span>FROM OUR KITCHEN · ACCRA, GHANA</span>
+        <span>FROM OUR KITCHEN · AHODWO, KUMASI</span>
         <h1>Our menu<span>.</span></h1>
         <p>Ghanaian favourites and global classics, prepared fresh and served with care.</p>
       </div>
@@ -402,7 +456,7 @@ function App() {
     <div className="about-page">
       <section className="about-hero">
         <div className="about-hero-copy">
-          <a href="/" onClick={(event) => navigate(event, "/")} className="about-back-link"><ArrowRight size={15} /> OrderPulse · Accra, Ghana</a>
+          <a href="/" onClick={(event) => navigate(event, "/")} className="about-back-link"><ArrowRight size={15} /> OrderPulse · Ahodwo, Kumasi</a>
           <span className="about-eyebrow">GOOD FOOD. GOOD PEOPLE. GHANAIAN HEART.</span>
           <h1>A taste of Ghana,<br />made to bring us <em>together.</em></h1>
           <p>From local favourites to familiar classics, OrderPulse is a warm place to share a meal, find your next favourite, and feel at home.</p>
@@ -410,7 +464,7 @@ function App() {
             <a href="/menu" onClick={(event) => navigate(event, "/menu")} className="about-primary-link">Explore our menu <ArrowRight size={16} /></a>
             <a href={sectionHref("reserve")} onClick={(event) => navigate(event, sectionHref("reserve"))} className="about-secondary-link">Find your table</a>
           </div>
-          <span className="about-hero-location"><MapPin size={15} /> Made with care in Accra</span>
+          <span className="about-hero-location"><MapPin size={15} /> Made with care in Ahodwo, Kumasi</span>
         </div>
         <div className="about-hero-image">
           <img src="/images/orderpulse-careers-chef.jpg" alt="Black chef preparing a dish in the kitchen" />
@@ -456,7 +510,7 @@ function App() {
         <div className="about-values-grid">
           {[
             ["01", "Quality", "We choose fresh ingredients and prepare each dish with care, so every plate feels just right."],
-            ["02", "Community", "Rooted in Accra, we make room for neighbours, families, friends, and new faces."],
+            ["02", "Community", "Rooted in Ahodwo, Kumasi, we make room for neighbours, families, friends, and new faces."],
             ["03", "Authenticity", "We celebrate Ghana’s rich food traditions while making space for flavours from around the world."],
             ["04", "Hospitality", "Every guest matters. We work as one team to make you feel welcome from the first hello."],
           ].map(([number, title, description]) => (
@@ -667,10 +721,10 @@ function App() {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "We couldn't place your order.");
-      setOrderReceipt(result);
-      setTrackingOrder({ ...result, phone: form.get("phone") });
-      setCart([]);
-      formElement.reset();
+      if (typeof result.paymentUrl !== "string") {
+        throw new Error("The order was saved, but secure payment checkout was not returned. Contact the restaurant with your order number.");
+      }
+      window.location.assign(result.paymentUrl);
     } catch (error) {
       setOrderMessage(error.message);
     } finally {
@@ -772,6 +826,7 @@ function App() {
     setCheckoutOpen(false);
     setOrderMessage("");
     setOrderReceipt(null);
+    setPaymentCallback(false);
   }
 
   const applicationPageContent = (
@@ -814,7 +869,7 @@ function App() {
   return (
     <div className="orderpulse-app-background min-h-screen text-forest">
       <div className="landing-topline">
-        FRESH FROM OUR KITCHEN <span>✳</span> ACCRA, GHANA
+        FRESH FROM OUR KITCHEN <span>✳</span> AHODWO, KUMASI
       </div>
 
       <header className="landing-header relative z-20 flex items-center justify-between px-5 py-4 md:px-10">
@@ -850,7 +905,7 @@ function App() {
         {isApplicationPage ? applicationPageContent : isMenuPage ? menuPageContent : isAboutPage ? aboutPageContent : <>
         <section className="landing-hero">
           <div className="landing-hero-copy">
-            <span className="landing-eyebrow"><Sparkles size={14} /> ACCRA KITCHEN · GHANA ON A PLATE</span>
+            <span className="landing-eyebrow"><Sparkles size={14} /> AHODWO KITCHEN · GHANA ON A PLATE</span>
             <h1 className="landing-headline">FRESH, LOCAL<br />& MADE <span>TO LOVE.</span></h1>
             <p>From smoky banku to a bowl of red red, come hungry for the flavours that bring us together.</p>
             <div className="landing-hero-actions">
@@ -1092,9 +1147,9 @@ function App() {
             <div className="restaurant-footer-top">
               <section className="restaurant-footer-address" aria-labelledby="restaurant-address-heading">
                 <span className="restaurant-footer-label" id="restaurant-address-heading">FIND US</span>
-                <a href="https://maps.google.com/?q=Osu%2C+Accra%2C+Ghana" target="_blank" rel="noreferrer">
+                <a href="https://maps.google.com/?q=Ahodwo%2C+Kumasi%2C+Ghana" target="_blank" rel="noreferrer">
                   <MapPin size={17} />
-                  <span>Osu, Accra<br />Ghana</span>
+                  <span>Ahodwo, Kumasi<br />Ghana</span>
                   <ArrowUpRight size={14} />
                 </a>
               </section>
@@ -1108,7 +1163,7 @@ function App() {
             <div className="restaurant-footer-bottom">
               <div className="restaurant-footer-brand">
                 <a href="/" onClick={(event) => navigate(event, "/")} className="restaurant-footer-mark" aria-label="OrderPulse home"><Leaf size={22} /></a>
-                <div><a href="/" onClick={(event) => navigate(event, "/")} className="restaurant-footer-wordmark">OrderPulse</a><p>Grown with care. Cooked with love. Served in Accra.</p></div>
+                <div><a href="/" onClick={(event) => navigate(event, "/")} className="restaurant-footer-wordmark">OrderPulse</a><p>Grown with care. Cooked with love. Served in Ahodwo, Kumasi.</p></div>
               </div>
               <nav className="restaurant-footer-links" aria-label="Footer navigation">
                 <a href="/menu" onClick={(event) => navigate(event, "/menu")}>Our menu</a>
@@ -1117,7 +1172,7 @@ function App() {
               </nav>
               <a className="restaurant-footer-privacy" href="/apply" onClick={(event) => navigate(event, "/apply")}>Career applications</a>
             </div>
-            <p className="restaurant-footer-copyright">© 2026 OrderPulse · Accra, Ghana</p>
+            <p className="restaurant-footer-copyright">© 2026 OrderPulse · Ahodwo, Kumasi, Ghana</p>
           </div>
           <div className="restaurant-footer-seal" aria-hidden="true"><Leaf size={34} /><span>MADE<br />WITH CARE</span></div>
         </div>
@@ -1136,7 +1191,7 @@ function App() {
       {checkoutOpen && <div className="checkout-overlay fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-forest/45 p-4 backdrop-blur-sm" onMouseDown={(event) => { if (event.target === event.currentTarget) closeCheckout(); }}>
         {orderReceipt ? <section className="receipt-card my-auto w-full max-w-md rounded-[1.5rem] bg-cream p-6 shadow-2xl sm:p-8" aria-labelledby="receipt-heading">
           <div className="receipt-printable">
-            <div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.2em] text-leaf">OrderPulse · Accra</p><h2 id="receipt-heading" className="mt-1 font-display text-2xl font-semibold">Order confirmation</h2></div><span className="receipt-print-icon"><Printer size={22} /></span></div>
+            <div className="flex items-start justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.2em] text-leaf">OrderPulse · Ahodwo, Kumasi</p><h2 id="receipt-heading" className="mt-1 font-display text-2xl font-semibold">Order confirmation</h2></div><span className="receipt-print-icon"><Printer size={22} /></span></div>
             <p className="mt-4 text-sm">Thank you, {orderReceipt.customerName}. Your order has been received.</p>
             <div className="my-5 rounded-2xl bg-white p-4">
               <p className="text-xs text-forest/55">Order number</p><p className="font-semibold">{orderReceipt.orderNumber}</p>
@@ -1145,9 +1200,9 @@ function App() {
             </div>
             <p className="text-xs text-forest/60">{orderReceipt.orderType === "dine-in" ? "Dine in" : "Pickup"} · {new Date(orderReceipt.createdAt).toLocaleString("en-GH", { dateStyle: "medium", timeStyle: "short" })}</p>
             <div className="mt-4 rounded-xl border border-forest/10 bg-white p-4 text-sm">
-              <p className="font-bold">Pay by MoMo · {orderReceipt.paymentStatus === "paid" ? "Payment confirmed" : "Awaiting payment confirmation"}</p>
-              <p className="mt-2">Send <strong>{money(orderReceipt.total)}</strong> to <strong>{momoPaymentInstructions.number}</strong> ({momoPaymentInstructions.accountName}).</p>
-              <p className="mt-1 text-xs text-forest/60">Use order number {orderReceipt.orderNumber} as the payment reference. We’ll begin preparing your order after staff confirm receipt.</p>
+              <p className="font-bold">Paystack · {orderReceipt.paymentStatus === "paid" ? "Payment confirmed" : "Awaiting payment confirmation"}</p>
+              <p className="mt-2">Order total: <strong>{money(orderReceipt.total)}</strong></p>
+              <p className="mt-1 text-xs text-forest/60">Payment is verified securely by Paystack before the kitchen begins preparing your order.</p>
             </div>
           </div>
           <div className="receipt-delivery mt-5 rounded-xl bg-white p-3 text-xs" role="status">
@@ -1160,9 +1215,17 @@ function App() {
             })()}</div>
             <p className="mt-2 text-[11px] text-forest/50">Use your order number and checkout phone in Track order to check progress later.</p>
           </div>
-          <div className="receipt-actions mt-5 grid grid-cols-2 gap-3"><button type="button" onClick={() => window.print()} className="inline-flex items-center justify-center gap-2 rounded-full border border-forest/15 px-4 py-3 text-sm font-semibold"><Printer size={16} /> Print receipt</button><button type="button" onClick={closeCheckout} className="rounded-full bg-forest px-4 py-3 text-sm font-semibold text-white">Done</button></div>
+          <div className="receipt-actions mt-5 grid grid-cols-3 gap-2"><button type="button" onClick={() => downloadReceiptPdf(orderReceipt)} className="inline-flex items-center justify-center gap-2 rounded-full border border-forest/15 px-3 py-3 text-xs font-semibold"><Download size={15} /> PDF</button><button type="button" onClick={() => window.print()} className="inline-flex items-center justify-center gap-2 rounded-full border border-forest/15 px-3 py-3 text-xs font-semibold"><Printer size={15} /> Print</button><button type="button" onClick={closeCheckout} className="rounded-full bg-forest px-3 py-3 text-xs font-semibold text-white">Done</button></div>
+        </section> : paymentCallback ? <section className="receipt-card my-auto w-full max-w-md rounded-[1.5rem] bg-cream p-6 shadow-2xl sm:p-8" aria-labelledby="payment-result-heading">
+          <p className="text-[10px] font-bold uppercase tracking-[.2em] text-leaf">OrderPulse · Ahodwo, Kumasi</p>
+          <h2 id="payment-result-heading" className="mt-2 font-display text-2xl font-semibold">Payment status</h2>
+          <p className="mt-4 rounded-xl bg-white p-4 text-sm" role={orderMessage.startsWith("Checking") ? "status" : "alert"}>
+            {orderMessage || "We’re confirming your payment. Keep this page open for a moment."}
+          </p>
+          <p className="mt-3 text-xs text-forest/60">Only successful Paystack verification releases an order to the kitchen. If you completed payment, allow a moment and check the order status again.</p>
+          <button type="button" onClick={closeCheckout} className="mt-5 w-full rounded-full bg-forest px-4 py-3 text-sm font-semibold text-white">Done</button>
         </section> : <form onSubmit={submitOrder} className="checkout-panel my-auto w-full max-w-lg rounded-[1.5rem] bg-cream shadow-2xl">
-          <div className="checkout-titlebar"><div><p>THE GREEN PLATE · ACCRA</p><h2>Checkout</h2></div><button type="button" onClick={closeCheckout} aria-label="Close checkout"><X size={20} /></button></div>
+          <div className="checkout-titlebar"><div><p>THE GREEN PLATE · AHODWO, KUMASI</p><h2>Checkout</h2></div><button type="button" onClick={closeCheckout} aria-label="Close checkout"><X size={20} /></button></div>
           <div className="checkout-body">
             <section className="checkout-section">
               <h3>Order summary <span>{cartCount} {cartCount === 1 ? "item" : "items"}</span></h3>
@@ -1175,7 +1238,7 @@ function App() {
               <h3>How are you enjoying your meal?</h3>
               <label className="field-label checkout-method">Order method<select name="orderType" defaultValue="pickup"><option value="pickup">Pickup · I'll collect my order</option><option value="dine-in">Dine in · I'll eat at the restaurant</option></select><ChevronDown size={14} className="pointer-events-none absolute bottom-4 right-4 text-forest/40" /></label>
             </section>
-            <section className="checkout-section checkout-payment"><span className="checkout-payment-icon"><ShoppingBag size={18} /></span><div><h3>Pay by Mobile Money</h3><p>Send <strong>{money(subtotal)}</strong> to <strong>{momoPaymentInstructions.number}</strong> in the name of <strong>{momoPaymentInstructions.accountName}</strong>. Use your order number as the payment reference after placing the order. Staff will confirm payment before preparation begins.</p></div></section>
+            <section className="checkout-section checkout-payment"><span className="checkout-payment-icon"><ShoppingBag size={18} /></span><div><h3>Secure payment by Paystack</h3><p>After placing your order, you’ll be redirected to Paystack to pay securely. The kitchen will only receive your order after Paystack confirms payment.</p></div></section>
             <section className="checkout-section checkout-contact">
               <h3>Your contact details</h3>
               <label className="field-label">Your name<input required name="customerName" minLength="2" maxLength="80" autoComplete="name" placeholder="e.g. Ama Mensah" /></label>
@@ -1184,7 +1247,7 @@ function App() {
             </section>
             <button disabled={busy || cart.length === 0} className="checkout-submit">{busy ? "Placing your order…" : `Place order · ${money(subtotal)}`}</button>
             {orderMessage && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{orderMessage}</p>}
-            <p className="checkout-footnote">Your order stays pending until staff confirm your MoMo payment. We'll email your order confirmation. Use your phone number with the order number to track payment and preparation status.</p>
+            <p className="checkout-footnote">You’ll continue to Paystack to complete payment. After payment is verified, you can download or print your PDF receipt. Track your order with the order number and checkout phone.</p>
           </div>
         </form>}
       </div>}
