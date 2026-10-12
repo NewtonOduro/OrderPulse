@@ -596,19 +596,52 @@ function App() {
     if (!section || !track) return undefined;
 
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const colorStops = [
+      ["#17384e", "#1b5065", "#102b40"],
+      ["#244d50", "#3b7666", "#183c45"],
+      ["#59442f", "#8a6039", "#3b3028"],
+      ["#4b3c5c", "#76557a", "#332c49"],
+      ["#17384e", "#1b5065", "#102b40"],
+    ];
     let horizontalDistance = 0;
     let frame = 0;
 
+    const interpolateColor = (first, second, progress) => {
+      const from = first.match(/[A-Fa-f0-9]{2}/g).map((part) => Number.parseInt(part, 16));
+      const to = second.match(/[A-Fa-f0-9]{2}/g).map((part) => Number.parseInt(part, 16));
+      return `#${from.map((channel, index) =>
+        Math.round(channel + (to[index] - channel) * progress).toString(16).padStart(2, "0"),
+      ).join("")}`;
+    };
+
+    const updateSectionColors = (progress) => {
+      const scaledProgress = progress * (colorStops.length - 1);
+      const colorIndex = Math.min(Math.floor(scaledProgress), colorStops.length - 2);
+      const blend = scaledProgress >= colorStops.length - 1 ? 1 : scaledProgress - colorIndex;
+      colorStops[0].forEach((_, index) => {
+        section.style.setProperty(
+          `--featured-color-${index}`,
+          interpolateColor(colorStops[colorIndex][index], colorStops[colorIndex + 1][index], blend),
+        );
+      });
+    };
+
     const updatePosition = () => {
       frame = 0;
+      const sectionTop = section.getBoundingClientRect().top + window.scrollY;
+      const progress = reducedMotion.matches
+        ? Math.min(Math.max(track.scrollLeft, 0), horizontalDistance)
+        : Math.min(Math.max(window.scrollY - sectionTop, 0), horizontalDistance);
+      const normalizedProgress = horizontalDistance ? progress / horizontalDistance : 0;
       if (reducedMotion.matches) {
         track.style.transform = "";
-        return;
+      } else {
+        track.style.transform = `translate3d(${-progress}px, 0, 0)`;
       }
-      const sectionTop = section.getBoundingClientRect().top + window.scrollY;
-      const progress = Math.min(Math.max(window.scrollY - sectionTop, 0), horizontalDistance);
-      track.style.transform = `translate3d(${-progress}px, 0, 0)`;
-      const plateRotation = horizontalDistance ? (progress / horizontalDistance) * 720 : 0;
+      updateSectionColors(normalizedProgress);
+      const plateRotation = reducedMotion.matches || !horizontalDistance
+        ? 0
+        : normalizedProgress * 720;
       track.querySelectorAll(".featured-menu-plate").forEach((plate, index) => {
         plate.style.setProperty("--plate-rotation", `${plateRotation + index * 12}deg`);
       });
@@ -619,21 +652,20 @@ function App() {
     };
 
     const measureTrack = () => {
+      horizontalDistance = Math.max(0, track.scrollWidth - section.clientWidth);
       if (reducedMotion.matches) {
         section.style.height = "";
         track.style.transform = "";
-        track.querySelectorAll(".featured-menu-plate").forEach((plate) => {
-          plate.style.removeProperty("--plate-rotation");
-        });
-        return;
+      } else {
+        const pin = section.querySelector(".featured-scroll-pin");
+        section.style.height = `${(pin?.getBoundingClientRect().height || window.innerHeight) + horizontalDistance}px`;
       }
-      horizontalDistance = Math.max(0, track.scrollWidth - window.innerWidth);
-      section.style.height = `${window.innerHeight + horizontalDistance}px`;
       schedulePositionUpdate();
     };
 
     const resizeObserver = new ResizeObserver(measureTrack);
     resizeObserver.observe(track);
+    track.addEventListener("scroll", schedulePositionUpdate, { passive: true });
     window.addEventListener("scroll", schedulePositionUpdate, { passive: true });
     window.addEventListener("resize", measureTrack);
     reducedMotion.addEventListener("change", measureTrack);
@@ -641,12 +673,16 @@ function App() {
 
     return () => {
       resizeObserver.disconnect();
+      track.removeEventListener("scroll", schedulePositionUpdate);
       window.removeEventListener("scroll", schedulePositionUpdate);
       window.removeEventListener("resize", measureTrack);
       reducedMotion.removeEventListener("change", measureTrack);
       if (frame) window.cancelAnimationFrame(frame);
       section.style.height = "";
       track.style.transform = "";
+      ["--featured-color-0", "--featured-color-1", "--featured-color-2"].forEach((property) => {
+        section.style.removeProperty(property);
+      });
       track.querySelectorAll(".featured-menu-plate").forEach((plate) => {
         plate.style.removeProperty("--plate-rotation");
       });

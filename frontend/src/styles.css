@@ -2279,8 +2279,9 @@ a {
   position: relative;
   min-height: 100svh;
   background:
-    radial-gradient(ellipse at 12% 100%, rgb(19 76 95 / 45%), transparent 48%),
-    linear-gradient(130deg, #17384e 0%, #1b5065 52%, #102b40 100%);
+    radial-gradient(ellipse at 12% 100%, color-mix(in srgb, var(--featured-color-1, #1b5065) 45%, transparent), transparent 48%),
+    linear-gradient(130deg, var(--featured-color-0, #17384e) 0%, var(--featured-color-1, #1b5065) 52%, var(--featured-color-2, #102b40) 100%);
+  transition: background 120ms linear;
 }
 
 .featured-scroll-pin {
@@ -3407,9 +3408,24 @@ a {
     transform: none !important;
   }
 
+  .featured-scroll-track::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  .featured-scroll-track::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: #f5d37f;
+  }
+
   .featured-menu-panel {
     height: min(65vh, 540px);
     scroll-snap-align: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .featured-scroll-section {
+    transition: none;
   }
 }
 
