@@ -70,6 +70,8 @@ test("sends verification and password-reset emails through Brevo", async () => {
   assert.deepEqual(verificationPayload.sender, { name: "OrderPulse", email: "orders@example.com" });
   assert.deepEqual(verificationPayload.to, [{ email: "customer@example.com" }]);
   assert.match(verificationPayload.textContent, /verifyEmail=verify-token/);
+  assert.match(verificationPayload.textContent, /expires in 30 seconds/i);
+  assert.match(verificationPayload.htmlContent, /expires in 30 seconds/i);
   const resetPayload = JSON.parse(requests[1].options.body);
   assert.match(resetPayload.textContent, /resetPassword=reset-token/);
 });

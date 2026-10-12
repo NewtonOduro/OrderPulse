@@ -300,8 +300,11 @@ test("customers must create an account or sign in before reserving", async () =>
   assert.equal((await unverifiedLogin.json()).code, "EMAIL_NOT_VERIFIED");
 
   const verificationToken = await createEmailAuthToken(registeredUser.id, "verify_email");
-  const storedVerificationToken = await db.get("SELECT token_hash FROM email_auth_tokens WHERE purpose = 'verify_email' ORDER BY id DESC LIMIT 1");
+  const storedVerificationToken = await db.get("SELECT token_hash, expires_at FROM email_auth_tokens WHERE purpose = 'verify_email' ORDER BY id DESC LIMIT 1");
   assert.equal(storedVerificationToken.token_hash, createHash("sha256").update(verificationToken).digest("hex"));
+  const verificationExpiryMs = Date.parse(storedVerificationToken.expires_at);
+  assert.ok(verificationExpiryMs >= Date.now() + 25_000);
+  assert.ok(verificationExpiryMs <= Date.now() + 30_000);
   const verification = await fetch(`${baseUrl}/api/auth/verify-email`, {
     method: "POST",
     headers: { "content-type": "application/json" },
