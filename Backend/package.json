@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/index.js",
-    "start": "node src/index.js",
-    "create-manager": "node src/create-manager.js",
+    "dev": "node --watch index.js",
+    "start": "node index.js",
+    "create-manager": "node scripts/create-manager.js",
     "import-menu-data": "node scripts/import-menu-data.js",
     "test": "node --test"
   },

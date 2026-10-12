@@ -437,7 +437,7 @@ function App() {
       <div className="menu-filter-list mb-8 flex gap-2 overflow-x-auto pb-2" aria-label="Filter menu by category">
         {categories.map((item) => <button key={item} type="button" aria-pressed={category === item} onClick={() => setCategory(item)} className={`menu-filter-button whitespace-nowrap rounded-full font-semibold ${category === item ? "is-active" : ""}`}>{item === "Foreign food" ? "Foreign foods" : item}</button>)}
       </div>
-      {menuError ? <p role="alert" className="rounded-2xl bg-red-50 p-5 text-sm text-red-700">{menuError}</p> : menuLoading ? <div className="menu-loading-grid" aria-label="Loading menu" aria-busy="true">{Array.from({ length: 6 }, (_, index) => <div className="menu-skeleton-card" key={index}><span /><div><i /><i /><i /></div></div>)}</div> : visibleCount === 0 ? <p className="menu-empty-state"><span aria-hidden="true">✳</span><strong>No dishes in this category yet</strong><span>Try another category, or check back soon for something fresh.</span></p> : (
+      {menuError ? <p role="alert" className="rounded-2xl bg-sky-50 p-5 text-sm text-sky-950">{menuError}</p> : menuLoading ? <div className="menu-loading-grid" aria-label="Loading menu" aria-busy="true">{Array.from({ length: 6 }, (_, index) => <div className="menu-skeleton-card" key={index}><span /><div><i /><i /><i /></div></div>)}</div> : visibleCount === 0 ? <p className="menu-empty-state"><span aria-hidden="true">✳</span><strong>No dishes in this category yet</strong><span>Try another category, or check back soon for something fresh.</span></p> : (
         <div className="space-y-12">
           {menuSections.filter((section) => section.groups.length > 0).map((section) => <section key={section.category} aria-label={section.title}>
             <div className="mb-6 flex items-center gap-3 border-b border-forest/10 pb-3"><span className="h-2 w-2 rounded-full bg-leaf" /><h2 className="font-display text-2xl font-semibold sm:text-3xl">{section.title}</h2><span className="text-xs text-forest/45">{section.groups.reduce((count, group) => count + group.items.length, 0)} dishes</span></div>
@@ -1064,7 +1064,7 @@ function App() {
                 <label className="field-label">Phone number<input required name="phone" type="tel" minLength="7" maxLength="30" value={trackingPhone} onChange={(event) => setTrackingPhone(event.target.value)} placeholder="Phone used at checkout" /></label>
                 <button disabled={trackingBusy} className="staff-primary sm:col-span-2">{trackingBusy ? "Checking order…" : "Check order status"}</button>
               </form>
-              {trackingError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{trackingError}</p>}
+              {trackingError && <p role="alert" className="mt-4 rounded-xl bg-sky-50 p-3 text-sm text-sky-950">{trackingError}</p>}
               {trackingOrder && <div className="mt-5 rounded-2xl bg-white p-4" aria-live="polite">
                 <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs text-forest/50">Order {trackingOrder.orderNumber}</p><p className="mt-1 text-sm font-semibold">Current status</p></div><span className={`status-pill status-${trackingOrder.status}`}>{trackingOrder.status === "awaiting_payment" ? "Awaiting payment" : trackingOrder.status}</span></div>
                 <p className="mt-2 text-xs text-forest/55">Payment: {trackingOrder.paymentStatus === "paid" ? "confirmed" : "pending"}</p>
@@ -1095,7 +1095,7 @@ function App() {
                 <label className="field-label">Anything we should know?<textarea name="notes" rows="2" maxLength="500" placeholder="A special occasion, dietary needs..." /></label>
               </div>
               {availabilityLoading && <p className="mt-4 text-sm text-forest/55" role="status">Checking tables for that time…</p>}
-              {availabilityError && <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700" role="alert">{availabilityError}</p>}
+              {availabilityError && <p className="mt-4 rounded-xl bg-sky-50 p-3 text-sm text-sky-950" role="alert">{availabilityError}</p>}
               {tableAvailability && <div className="mt-4 rounded-xl bg-[#e9eee4] p-3.5" aria-live="polite">
                 <p className="text-xs font-semibold text-forest">{tableAvailability.tables.length ? `${tableAvailability.tables.length} tables available` : "No tables available for this time"} · {tableAvailability.durationMinutes}-minute visit</p>
                 {tableAvailability.tables.length
@@ -1246,7 +1246,7 @@ function App() {
               <label className="field-label">Phone number<input required name="phone" minLength="7" maxLength="30" type="tel" autoComplete="tel" placeholder="+233 24 000 0000" /></label>
             </section>
             <button disabled={busy || cart.length === 0} className="checkout-submit">{busy ? "Placing your order…" : `Place order · ${money(subtotal)}`}</button>
-            {orderMessage && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{orderMessage}</p>}
+            {orderMessage && <p role="alert" className="mt-4 rounded-xl bg-sky-50 p-3 text-sm text-sky-950">{orderMessage}</p>}
             <p className="checkout-footnote">You’ll continue to Paystack to complete payment. After payment is verified, you can download or print your PDF receipt. Track your order with the order number and checkout phone.</p>
           </div>
         </form>}

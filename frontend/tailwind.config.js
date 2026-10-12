@@ -4,10 +4,10 @@ export default {
   theme: {
     extend: {
       colors: {
-        forest: "#351a18",
-        leaf: "#df292f",
-        lime: "#f5d37f",
-        cream: "#fff7ed",
+        forest: "#18324b",
+        leaf: "#176b7a",
+        lime: "#f2b544",
+        cream: "#f4f7fa",
       },
       fontFamily: {
         sans: ["DM Sans", "sans-serif"],

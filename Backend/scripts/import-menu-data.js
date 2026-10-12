@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { config } from "dotenv";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isValidMenuPlacement } from "../src/menu-categories.js";
+import { isValidMenuPlacement } from "../schemas/menu-categories.js";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 config({ path: resolve(scriptDirectory, "../.env") });
@@ -131,7 +131,7 @@ if (!process.env.PG_MEM_TEST && !process.env.DATABASE_URL) {
 }
 
 process.env.PG_SKIP_SEED = "1";
-const { db } = await import("../src/database.js");
+const { db } = await import("../database/database.js");
 
 try {
   await db.transaction(async (tx) => {

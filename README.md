@@ -20,6 +20,7 @@ This app uses a MySQL 8-compatible database for persistent restaurant data. The 
 - `frontend/` contains the React, Tailwind CSS, and Vite application.
 - The MySQL database schema and starter records are initialized by the API on startup.
 - The root `package.json` provides convenience commands to run, build, test, and initialize the manager account.
+- [The project guide](Backend/docs/project-guide.md) documents the backend architecture, API surface, core workflows, data model, configuration, testing, and Render deployment.
 
 ## Included workflows
 
