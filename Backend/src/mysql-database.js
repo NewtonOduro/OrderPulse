@@ -190,6 +190,7 @@ const databaseUrl = new URL(connectionString);
 if (!["mysql:", "mysql2:"].includes(databaseUrl.protocol)) {
   throw new Error("MYSQL_URL must use the mysql:// or mysql2:// URL scheme.");
 }
+const sslCa = process.env.MYSQL_SSL_CA?.replace(/\\n/g, "\n");
 const pool = mysql.createPool({
   host: databaseUrl.hostname,
   port: Number(databaseUrl.port) || 3306,
@@ -202,7 +203,7 @@ const pool = mysql.createPool({
   supportBigNumbers: true,
   bigNumberStrings: false,
   ...(process.env.MYSQL_SSL === "true" || databaseUrl.searchParams.get("ssl-mode")?.toUpperCase() === "REQUIRED"
-    ? { ssl: { rejectUnauthorized: true } }
+    ? { ssl: { rejectUnauthorized: true, ...(sslCa ? { ca: sslCa } : {}) } }
     : {}),
 });
 

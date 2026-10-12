@@ -14,6 +14,8 @@ services:
         sync: false
       - key: MYSQL_SSL
         value: "true"
+      - key: MYSQL_SSL_CA
+        sync: false
       - key: PAYSTACK_SECRET_KEY
         sync: false
       - key: PUBLIC_APP_URL
