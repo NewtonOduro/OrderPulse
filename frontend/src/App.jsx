@@ -599,6 +599,7 @@ function App() {
     const track = featuredTrackRef.current;
     if (!section || !track) return undefined;
 
+    const desktopCarousel = window.matchMedia("(min-width: 1121px)");
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const colorStops = [
       ["#17384e", "#1b5065", "#102b40"],
@@ -632,6 +633,7 @@ function App() {
 
     const updatePosition = () => {
       frame = 0;
+      if (!desktopCarousel.matches) return;
       const sectionTop = section.getBoundingClientRect().top + window.scrollY;
       const progress = reducedMotion.matches
         ? Math.min(Math.max(track.scrollLeft, 0), horizontalDistance)
@@ -656,6 +658,18 @@ function App() {
     };
 
     const measureTrack = () => {
+      if (!desktopCarousel.matches) {
+        horizontalDistance = 0;
+        section.style.height = "";
+        track.style.transform = "";
+        section.style.removeProperty("--featured-color-0");
+        section.style.removeProperty("--featured-color-1");
+        section.style.removeProperty("--featured-color-2");
+        track.querySelectorAll(".featured-menu-plate").forEach((plate) => {
+          plate.style.removeProperty("--plate-rotation");
+        });
+        return;
+      }
       horizontalDistance = Math.max(0, track.scrollWidth - section.clientWidth);
       if (reducedMotion.matches) {
         section.style.height = "";
@@ -672,6 +686,7 @@ function App() {
     track.addEventListener("scroll", schedulePositionUpdate, { passive: true });
     window.addEventListener("scroll", schedulePositionUpdate, { passive: true });
     window.addEventListener("resize", measureTrack);
+    desktopCarousel.addEventListener("change", measureTrack);
     reducedMotion.addEventListener("change", measureTrack);
     measureTrack();
 
@@ -680,6 +695,7 @@ function App() {
       track.removeEventListener("scroll", schedulePositionUpdate);
       window.removeEventListener("scroll", schedulePositionUpdate);
       window.removeEventListener("resize", measureTrack);
+      desktopCarousel.removeEventListener("change", measureTrack);
       reducedMotion.removeEventListener("change", measureTrack);
       if (frame) window.cancelAnimationFrame(frame);
       section.style.height = "";
