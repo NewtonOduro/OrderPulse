@@ -5632,6 +5632,13 @@ a {
   color: #526575;
 }
 
+@media (max-width: 1024px), (pointer: coarse) {
+  .desktop-install-button,
+  .desktop-install-help {
+    display: none !important;
+  }
+}
+
 .order-feedback-form {
   display: grid;
   gap: 12px;
