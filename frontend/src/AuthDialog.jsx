@@ -12,6 +12,7 @@ function AuthDialog({ mode, token, onClose, onSuccess, onModeChange, onClearAuth
   const [errorCode, setErrorCode] = useState("");
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const [verificationComplete, setVerificationComplete] = useState(false);
   const registering = mode === "register";
   const verifying = mode === "verify";
   const resetting = mode === "reset";
@@ -45,8 +46,8 @@ function AuthDialog({ mode, token, onClose, onSuccess, onModeChange, onClearAuth
         const result = await post("verify-email", { token });
         setEmail(result.email);
         setStatus(result.message);
+        setVerificationComplete(true);
         onClearAuthToken();
-        onModeChange("login");
         return;
       }
       if (resetting) {
@@ -91,32 +92,37 @@ function AuthDialog({ mode, token, onClose, onSuccess, onModeChange, onClearAuth
     setError("");
     setErrorCode("");
     setStatus("");
+    setVerificationComplete(false);
     setPassword("");
     onModeChange(nextMode);
   }
 
-  const title = registering
-    ? "Join us at the table."
-    : verifying
-      ? "Verify your email."
-      : resetting
-        ? "Choose a new password."
-        : mode === "forgot"
-          ? "Reset your password."
-          : mode === "resend"
-            ? "Verify your account."
-            : "Welcome back.";
-  const description = registering
-    ? "Create an account to request and keep track of your table reservations."
-    : verifying
-      ? "Confirm your email address to activate your OrderPulse account."
-      : resetting
-        ? "Choose a new password for your OrderPulse account."
-        : mode === "forgot"
-          ? "Enter your account email and we'll send a password reset link if it matches an active account."
-          : mode === "resend"
-            ? "Enter your account email to request a fresh verification link."
-            : "Sign in to request a reservation and manage your upcoming visits.";
+  const title = verificationComplete
+    ? "Email verified."
+    : registering
+      ? "Join us at the table."
+      : verifying
+        ? "Verify your email."
+        : resetting
+          ? "Choose a new password."
+          : mode === "forgot"
+            ? "Reset your password."
+            : mode === "resend"
+              ? "Verify your account."
+              : "Welcome back.";
+  const description = verificationComplete
+    ? "Your account is active. Return to OrderPulse to continue."
+    : registering
+      ? "Create an account to request and keep track of your table reservations."
+      : verifying
+        ? "Confirm your email address to activate your OrderPulse account."
+        : resetting
+          ? "Choose a new password for your OrderPulse account."
+          : mode === "forgot"
+            ? "Enter your account email and we'll send a password reset link if it matches an active account."
+            : mode === "resend"
+              ? "Enter your account email to request a fresh verification link."
+              : "Sign in to request a reservation and manage your upcoming visits.";
 
   return (
     <div className="auth-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -126,7 +132,12 @@ function AuthDialog({ mode, token, onClose, onSuccess, onModeChange, onClearAuth
         <span className="auth-eyebrow">ORDERPULSE · ACCOUNT</span>
         <h2 id="auth-heading">{title}</h2>
         <p className="auth-description">{description}</p>
-        <form className="auth-form" onSubmit={submit}>
+        {verificationComplete ? <div className="auth-form">
+          <p role="status" className="auth-success">{status}</p>
+          <a className="auth-submit auth-return-link" href="/?returnToApp=1">Return to OrderPulse</a>
+          <p className="auth-switch">If this page stays in Chrome, open OrderPulse from your phone’s app list.</p>
+          <p className="auth-switch"><button type="button" onClick={() => changeMode("login")}>Sign in in this browser</button></p>
+        </div> : <form className="auth-form" onSubmit={submit}>
           {registering && <>
             <label className="auth-label">Full name<span className="auth-input-row"><UserRound size={17} /><input aria-label="Full name" autoComplete="name" minLength="2" maxLength="80" onChange={(event) => setName(event.target.value)} placeholder="Ama Mensah" required value={name} /></span></label>
             <label className="auth-label">Phone number<span className="auth-input-row"><Phone size={17} /><input aria-label="Phone number" autoComplete="tel" minLength="7" maxLength="30" onChange={(event) => setPhone(event.target.value)} placeholder="+233 24 000 0000" required type="tel" value={phone} /></span></label>
@@ -137,7 +148,7 @@ function AuthDialog({ mode, token, onClose, onSuccess, onModeChange, onClearAuth
           {error && <p role="alert" className="auth-error">{error}</p>}
           {status && <p role="status" className="auth-success">{status}</p>}
           <button className="auth-submit" disabled={busy}>{busy ? "One moment…" : verifying ? "Verify email" : resetting ? "Save new password" : mode === "forgot" ? "Send reset link" : mode === "resend" ? "Send verification link" : registering ? "Create guest account" : "Sign in"}</button>
-        </form>
+        </form>}
         {signingIn && <p className="auth-switch"><button onClick={() => changeMode("forgot")}>Forgot password?</button></p>}
         {errorCode === "EMAIL_NOT_VERIFIED" && <p className="auth-switch"><button onClick={() => changeMode("resend")}>Resend verification email</button></p>}
         {(mode === "forgot" || mode === "resend") && <p className="auth-switch"><button onClick={() => changeMode("login")}>Back to sign in</button></p>}

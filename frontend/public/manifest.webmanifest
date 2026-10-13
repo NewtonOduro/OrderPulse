@@ -5,6 +5,9 @@
   "description": "Order Ghanaian favourites and follow your restaurant orders with OrderPulse.",
   "start_url": "/",
   "scope": "/",
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#f4f7fa",

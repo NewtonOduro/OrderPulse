@@ -268,6 +268,13 @@ a {
   background: #416b4f;
 }
 
+.auth-return-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 .auth-submit:disabled {
   cursor: wait;
   opacity: .6;
