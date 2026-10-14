@@ -2408,6 +2408,10 @@ a {
   color: #fff7ed;
 }
 
+.featured-carousel-controls {
+  display: none;
+}
+
 .featured-menu-plate {
   display: grid;
   width: clamp(190px, 22vw, 290px);
@@ -3440,7 +3444,7 @@ a {
   }
 }
 
-@media (min-width: 1121px) and (prefers-reduced-motion: reduce) {
+@media (min-width: 768px) and (pointer: fine) and (prefers-reduced-motion: reduce) {
   .featured-scroll-section {
     height: auto !important;
   }
@@ -3476,10 +3480,27 @@ a {
   }
 }
 
-@media (max-width: 1120px) {
+@media (pointer: coarse), (max-width: 767px) {
   .featured-scroll-section {
     height: auto !important;
     min-height: 0;
+    transition: background 300ms ease;
+  }
+
+  .featured-scroll-section[data-featured-slide-theme="0"] {
+    background: #8b9650;
+  }
+
+  .featured-scroll-section[data-featured-slide-theme="1"] {
+    background: #273451;
+  }
+
+  .featured-scroll-section[data-featured-slide-theme="2"] {
+    background: #e58a32;
+  }
+
+  .featured-scroll-section[data-featured-slide-theme="3"] {
+    background: #76557a;
   }
 
   .featured-scroll-pin {
@@ -3495,18 +3516,58 @@ a {
     display: flex;
     width: 100%;
     flex: 0 0 auto;
-    flex-direction: column;
-    gap: 24px;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 0;
     overflow: visible;
     transform: none !important;
   }
 
   .featured-menu-panel {
+    display: none;
     width: min(720px, calc(100% - 32px));
     height: auto;
     min-height: 0;
+    flex: 0 0 100%;
     margin: 0 auto;
     padding: 16px 0;
+  }
+
+  .featured-menu-panel[data-featured-active="true"] {
+    display: flex;
+  }
+
+  .featured-carousel-controls {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    margin: 20px 0 10px;
+  }
+
+  .featured-carousel-controls button {
+    display: grid;
+    width: 62px;
+    height: 52px;
+    place-items: center;
+    border: 1px solid #fff7ed;
+    background: transparent;
+    color: #fff7ed;
+    transition: background-color 180ms ease, color 180ms ease;
+  }
+
+  .featured-carousel-controls button + button {
+    border-left: 0;
+  }
+
+  .featured-carousel-controls button:hover,
+  .featured-carousel-controls button:focus-visible {
+    background: #fff7ed;
+    color: #18324b;
+  }
+
+  .featured-carousel-controls button:focus-visible {
+    outline: 3px solid #f5d37f;
+    outline-offset: 3px;
   }
 
   .featured-scroll-cue {

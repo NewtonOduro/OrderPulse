@@ -4,6 +4,8 @@ import {
   ArrowUpRight,
   ChefHat,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleUserRound,
   Clock3,
   Copy,
@@ -174,6 +176,7 @@ function App() {
     const position = new URLSearchParams(window.location.search).get("position");
     return openPositions.some((item) => item.title === position) ? position : "";
   });
+  const [featuredSlideIndex, setFeaturedSlideIndex] = useState(0);
   const featuredSectionRef = useRef(null);
   const featuredTrackRef = useRef(null);
 
@@ -599,7 +602,7 @@ function App() {
     const track = featuredTrackRef.current;
     if (!section || !track) return undefined;
 
-    const desktopCarousel = window.matchMedia("(min-width: 1121px)");
+    const desktopCarousel = window.matchMedia("(min-width: 768px) and (pointer: fine)");
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     const colorStops = [
       ["#17384e", "#1b5065", "#102b40"],
@@ -1084,7 +1087,12 @@ function App() {
           </div>
         </section>
 
-        {featuredItems.length > 0 && <section ref={featuredSectionRef} className="featured-scroll-section" aria-label="OrderPulse menu favourites">
+        {featuredItems.length > 0 && <section
+          ref={featuredSectionRef}
+          className="featured-scroll-section"
+          data-featured-slide-theme={featuredSlideIndex % 4}
+          aria-label="OrderPulse menu favourites"
+        >
           <div className="featured-scroll-pin">
             <div className="featured-scroll-heading">
               <span>GHANAIAN · GLOBAL · SIPS</span>
@@ -1092,11 +1100,33 @@ function App() {
               <p>From Ghanaian favourites to global plates and refreshing drinks.</p>
             </div>
             <div ref={featuredTrackRef} className="featured-scroll-track">
-              {featuredItems.map((item, index) => <article key={item.id} className="featured-menu-panel">
+              {featuredItems.map((item, index) => <article
+                key={item.id}
+                className="featured-menu-panel"
+                data-featured-active={index === featuredSlideIndex % featuredItems.length}
+              >
                 <div className="featured-menu-plate" aria-hidden="true">
                   <div className="featured-plate-wood">
                     <img src={item.imageUrl} alt="" onError={handleMenuImageError} loading="lazy" />
                   </div>
+                </div>
+                <div className="featured-carousel-controls" role="group" aria-label="Choose featured dish">
+                  <button
+                    type="button"
+                    aria-label="Previous featured dish"
+                    onClick={() => setFeaturedSlideIndex((current) =>
+                      (current - 1 + featuredItems.length) % featuredItems.length,
+                    )}
+                  >
+                    <ChevronLeft size={22} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Next featured dish"
+                    onClick={() => setFeaturedSlideIndex((current) => (current + 1) % featuredItems.length)}
+                  >
+                    <ChevronRight size={22} />
+                  </button>
                 </div>
                 <div className="featured-menu-copy">
                   <span className="featured-menu-index">0{index + 1} / 0{featuredItems.length}</span>
