@@ -134,7 +134,7 @@ function AuthDialog({ mode, token, onClose, onSuccess, onModeChange, onClearAuth
         <p className="auth-description">{description}</p>
         {verificationComplete ? <div className="auth-form">
           <p role="status" className="auth-success">{status}</p>
-          <a className="auth-submit auth-return-link" href="/?returnToApp=1">Return to OrderPulse</a>
+          <a className="auth-submit auth-return-link" href="/">Go back to the app</a>
           <p className="auth-switch">If this page stays in Chrome, open OrderPulse from your phone’s app list.</p>
           <p className="auth-switch"><button type="button" onClick={() => changeMode("login")}>Sign in in this browser</button></p>
         </div> : <form className="auth-form" onSubmit={submit}>
