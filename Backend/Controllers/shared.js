@@ -105,13 +105,26 @@ export const validReservationHours = (time) => {
 export const bookingStartsInFuture = (date, time) => Date.parse(`${date}T${time}:00Z`) >= Date.now();
 
 export async function readOrders(database = db) {
-  const orders = await database.all("SELECT * FROM orders ORDER BY created_at DESC, id DESC");
+  const orders = await database.all(`
+    SELECT o.*, t.name AS table_name
+    FROM orders o LEFT JOIN restaurant_tables t ON t.id = o.table_id
+    ORDER BY o.created_at DESC, o.id DESC
+  `);
   return Promise.all(orders.map(async (order) => ({
     id: order.id,
     orderNumber: order.order_number,
     customerName: order.customer_name,
     phone: order.phone,
     orderType: order.order_type,
+    tableId: order.table_id,
+    tableName: order.table_name,
+    deliveryAddress: order.delivery_address,
+    deliveryArea: order.delivery_area,
+    deliveryFee: order.delivery_fee_pesewas / 100,
+    dealCode: order.deal_code,
+    dealDiscount: order.deal_discount_pesewas / 100,
+    rewardsPointsUsed: order.rewards_points_used,
+    rewardsDiscount: order.rewards_discount_pesewas / 100,
     total: order.total_pesewas / 100,
     status: order.status,
     paymentStatus: order.payment_status,
@@ -119,6 +132,7 @@ export async function readOrders(database = db) {
     updatedAt: order.updated_at,
     items: (await database.all("SELECT * FROM order_items WHERE order_id = ? ORDER BY id", [order.id])).map((item) => ({
       name: item.item_name,
+      menuItemId: item.menu_item_id,
       quantity: item.quantity,
       unitPrice: item.unit_price_pesewas / 100,
     })),

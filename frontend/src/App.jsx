@@ -10,12 +10,15 @@ import {
   Clock3,
   Copy,
   Download,
+  Gift,
+  Heart,
   Leaf,
   MapPin,
   Menu as MenuIcon,
   Minus,
   Plus,
   Printer,
+  RotateCcw,
   ShoppingBag,
   Sparkles,
   Star,
@@ -123,6 +126,7 @@ function App() {
   const [isAboutPage, setIsAboutPage] = useState(() => window.location.pathname === "/about");
   const [menuItems, setMenuItems] = useState([]);
   const [menuError, setMenuError] = useState("");
+  const [optionsError, setOptionsError] = useState("");
   const [menuLoading, setMenuLoading] = useState(true);
   const [category, setCategory] = useState("All");
   const [homeMenuCategory, setHomeMenuCategory] = useState("All");
@@ -152,6 +156,21 @@ function App() {
     return params.has("verifyEmail") ? "verify" : params.has("resetPassword") ? "reset" : "login";
   });
   const [customerReservations, setCustomerReservations] = useState([]);
+  const [restaurantOptions, setRestaurantOptions] = useState({ deliveryAreas: [], deals: [], tables: [] });
+  const [customerEngagement, setCustomerEngagement] = useState(null);
+  const [customerFavorites, setCustomerFavorites] = useState([]);
+  const [customerOrders, setCustomerOrders] = useState([]);
+  const [checkoutOrderType, setCheckoutOrderType] = useState(() =>
+    new URLSearchParams(window.location.search).has("table") ? "dine-in" : "pickup",
+  );
+  const [qrTableId, setQrTableId] = useState(() => {
+    const table = Number(new URLSearchParams(window.location.search).get("table"));
+    return Number.isSafeInteger(table) && table > 0 ? table : null;
+  });
+  const qrTableName = restaurantOptions.tables.find((table) => table.id === qrTableId)?.name || "";
+  const [deliveryAreaId, setDeliveryAreaId] = useState("");
+  const [dealCode, setDealCode] = useState("");
+  const [useRewards, setUseRewards] = useState(false);
   const [bookingSlot, setBookingSlot] = useState({ date: "", time: "", partySize: 2 });
   const [tableAvailability, setTableAvailability] = useState(null);
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
@@ -185,7 +204,10 @@ function App() {
       setIsMenuPage(window.location.pathname === "/menu");
       setIsApplicationPage(window.location.pathname === "/apply");
       setIsAboutPage(window.location.pathname === "/about");
-      const position = new URLSearchParams(window.location.search).get("position");
+      const params = new URLSearchParams(window.location.search);
+      const table = Number(params.get("table"));
+      setQrTableId(Number.isSafeInteger(table) && table > 0 ? table : null);
+      const position = params.get("position");
       setSelectedPosition(openPositions.some((item) => item.title === position) ? position : "");
     };
     window.addEventListener("popstate", syncRoute);
@@ -239,6 +261,13 @@ function App() {
       .then(setMenuItems)
       .catch((error) => setMenuError(error.message))
       .finally(() => setMenuLoading(false));
+    fetch("/api/restaurant-options")
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "We couldn't load current offers and delivery areas.");
+        setRestaurantOptions(result);
+      })
+      .catch((error) => setOptionsError(error.message));
     fetch("/api/auth/me", { credentials: "same-origin" })
       .then(async (response) => {
         if (response.status === 401) return null;
@@ -251,6 +280,34 @@ function App() {
       })
       .catch((error) => setMenuError(error.message));
   }, []);
+
+  useEffect(() => {
+    if (!customerUser) {
+      setCustomerEngagement(null);
+      setCustomerFavorites([]);
+      setCustomerOrders([]);
+      setUseRewards(false);
+      return undefined;
+    }
+    const controller = new AbortController();
+    Promise.all([
+      fetch("/api/customer/engagement", { credentials: "same-origin", signal: controller.signal }),
+      fetch("/api/customer/favorites", { credentials: "same-origin", signal: controller.signal }),
+      fetch("/api/customer/orders", { credentials: "same-origin", signal: controller.signal }),
+    ])
+      .then(async ([engagementResponse, favoritesResponse, ordersResponse]) => {
+        const results = await Promise.all([engagementResponse, favoritesResponse, ordersResponse].map((response) => response.json()));
+        const failed = [engagementResponse, favoritesResponse, ordersResponse].find((response) => !response.ok);
+        if (failed) throw new Error(results[[engagementResponse, favoritesResponse, ordersResponse].indexOf(failed)]?.error || "We couldn't load your OrderPulse account.");
+        setCustomerEngagement(results[0]);
+        setCustomerFavorites(results[1]);
+        setCustomerOrders(results[2]);
+      })
+      .catch((error) => {
+        if (error.name !== "AbortError") setBookingMessage(error.message);
+      });
+    return () => controller.abort();
+  }, [customerUser]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -402,7 +459,10 @@ function App() {
     () => {
       const availableItems = menuItems
         .filter((item) => item.available !== false)
-        .sort((first, second) => Number(Boolean(second.badge)) - Number(Boolean(first.badge)));
+        .sort((first, second) =>
+          Number(Boolean(second.badge)) - Number(Boolean(first.badge)) ||
+          (second.popularity || 0) - (first.popularity || 0),
+        );
       const featured = [];
       const internationalItems = availableItems.filter((item) =>
         item.category === "Foreign food" ||
@@ -444,7 +504,10 @@ function App() {
     const additionalItems = categoryItems.filter((item) => !featuredIds.has(item.id));
     return (additionalItems.length ? additionalItems : categoryItems)
       .slice()
-      .sort((first, second) => Number(Boolean(second.badge)) - Number(Boolean(first.badge)))
+      .sort((first, second) =>
+        (second.popularity || 0) - (first.popularity || 0) ||
+        Number(Boolean(second.badge)) - Number(Boolean(first.badge)),
+      )
       .slice(0, 4);
   }, [featuredItems, homeMenuCategory, menuItems]);
   const visibleCount = menuSections.reduce(
@@ -453,12 +516,32 @@ function App() {
   );
   const cartCount = cart.reduce((count, item) => count + item.quantity, 0);
   const subtotal = cart.reduce((total, item) => total + item.price * item.quantity, 0);
+  const matchingDeal = restaurantOptions.deals.find((deal) => deal.code.toLowerCase() === dealCode.trim().toLowerCase());
+  const dealDiscount = matchingDeal ? Math.min(subtotal, matchingDeal.discount) : 0;
+  const rewardsDiscount = useRewards && (customerEngagement?.points || 0) >= 100
+    ? Math.min(5, Math.max(0, subtotal - dealDiscount))
+    : 0;
+  const deliveryFee = checkoutOrderType === "delivery"
+    ? restaurantOptions.deliveryAreas.find((area) => area.id === Number(deliveryAreaId))?.fee || 0
+    : 0;
+  const checkoutTotal = Math.max(0, subtotal + deliveryFee - dealDiscount - rewardsDiscount);
+
+  useEffect(() => {
+    if (subtotal - dealDiscount < 5) setUseRewards(false);
+  }, [dealDiscount, subtotal]);
+
+  useEffect(() => {
+    if (qrTableId) setCheckoutOrderType("dine-in");
+  }, [qrTableId]);
 
   function navigate(event, href) {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     const target = new URL(href, window.location.href);
+    if (qrTableId && !target.searchParams.has("table")) target.searchParams.set("table", String(qrTableId));
     window.history.pushState({}, "", `${target.pathname}${target.search}${target.hash}`);
+    const table = Number(target.searchParams.get("table"));
+    setQrTableId(Number.isSafeInteger(table) && table > 0 ? table : null);
     setIsMenuPage(target.pathname === "/menu");
     setIsApplicationPage(target.pathname === "/apply");
     setIsAboutPage(target.pathname === "/about");
@@ -481,6 +564,8 @@ function App() {
         <span>FROM OUR KITCHEN · AHODWO, KUMASI</span>
         <h1>Our menu<span>.</span></h1>
         <p>Ghanaian favourites and global classics, prepared fresh and served with care.</p>
+        {qrTableId && <p className="mt-4 rounded-2xl bg-[#e9eee4] p-4 text-sm font-semibold text-leaf">Ordering for {qrTableName || `Table ${qrTableId}`} · Add dishes to your bag and choose checkout when you're ready.</p>}
+        {optionsError && <p role="alert" className="mt-3 rounded-xl bg-sky-50 p-3 text-sm text-sky-950">{optionsError}</p>}
       </div>
       <div className="menu-filter-list mb-8 flex gap-2 overflow-x-auto pb-2" aria-label="Filter menu by category">
         {categories.map((item) => <button key={item} type="button" aria-pressed={category === item} onClick={() => setCategory(item)} className={`menu-filter-button whitespace-nowrap rounded-full font-semibold ${category === item ? "is-active" : ""}`}>{item === "Foreign food" ? "Foreign foods" : item}</button>)}
@@ -491,7 +576,7 @@ function App() {
             <div className="mb-6 flex items-center gap-3 border-b border-forest/10 pb-3"><span className="h-2 w-2 rounded-full bg-leaf" /><h2 className="font-display text-2xl font-semibold sm:text-3xl">{section.title}</h2><span className="text-xs text-forest/45">{section.groups.reduce((count, group) => count + group.items.length, 0)} dishes</span></div>
             <div className="space-y-8">{section.groups.map((group) => <div key={`${section.category}-${group.title}`}><div className="mb-4 flex items-center gap-2"><h3 className="text-sm font-semibold text-forest/75">{group.title}</h3><span className="text-[10px] text-forest/40">{group.items.length} items</span></div><div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
               {group.items.map((item) => <article key={item.id} className="group min-w-0 overflow-hidden rounded-[1.4rem] bg-white transition hover:-translate-y-1 hover:shadow-xl hover:shadow-forest/5">
-                <div className="relative h-48 overflow-hidden sm:h-52"><img src={item.imageUrl} alt={item.name} onError={handleMenuImageError} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" loading="lazy" />{item.badge && <span className="absolute left-4 top-4 rounded-full bg-white/90 px-3 py-1.5 text-[10px] font-bold text-leaf backdrop-blur">{item.badge}</span>}<button type="button" onClick={() => updateQuantity(item, 1)} className="menu-add-button absolute bottom-3 right-3 grid place-items-center rounded-full bg-lime text-forest shadow" aria-label={`Add ${item.name} to bag`}><Plus size={17} /></button></div>
+                <div className="relative h-48 overflow-hidden sm:h-52"><img src={item.imageUrl} alt={item.name} onError={handleMenuImageError} className="h-full w-full object-cover transition duration-500 group-hover:scale-105" loading="lazy" />{(item.badge || item.popularity > 0) && <span className="absolute left-4 top-4 rounded-full bg-white/90 px-3 py-1.5 text-[10px] font-bold text-leaf backdrop-blur">{item.badge || "Popular"}</span>}<button type="button" onClick={() => toggleFavorite(item)} className="absolute right-3 top-3 grid h-10 w-10 place-items-center rounded-full bg-white/90 text-rose-700 shadow" aria-label={`${customerFavorites.some((favorite) => favorite.id === item.id) ? "Remove" : "Save"} ${item.name} ${customerFavorites.some((favorite) => favorite.id === item.id) ? "from" : "to"} favorites`} aria-pressed={customerFavorites.some((favorite) => favorite.id === item.id)}><Heart size={18} fill={customerFavorites.some((favorite) => favorite.id === item.id) ? "currentColor" : "none"} /></button><button type="button" onClick={() => updateQuantity(item, 1)} className="menu-add-button absolute bottom-3 right-3 grid place-items-center rounded-full bg-lime text-forest shadow" aria-label={`Add ${item.name} to bag`}><Plus size={17} /></button></div>
                 <div className="p-4 sm:p-5"><div className="flex items-start justify-between gap-3"><h4 className="font-display text-lg font-semibold leading-snug sm:text-xl">{item.name}</h4><span className="shrink-0 whitespace-nowrap text-sm font-bold">{money(item.price)}</span></div><p className="mt-2.5 min-h-[42px] text-xs leading-5 text-forest/55">{item.description}</p></div>
               </article>)}
             </div></div>)}</div>
@@ -723,6 +808,54 @@ function App() {
     });
   }
 
+  async function toggleFavorite(menuItem) {
+    if (!customerUser) {
+      setAuthMode("login");
+      setAuthOpen(true);
+      return;
+    }
+    const isFavorite = customerFavorites.some((item) => item.id === menuItem.id);
+    try {
+      const response = await fetch(`/api/customer/favorites/${menuItem.id}`, {
+        method: isFavorite ? "DELETE" : "POST",
+        credentials: "same-origin",
+      });
+      if (!response.ok) {
+        const result = await response.json();
+        throw new Error(result.error || "We couldn't update your saved dishes.");
+      }
+      setCustomerFavorites((current) => isFavorite
+        ? current.filter((item) => item.id !== menuItem.id)
+        : [{ ...menuItem, favoritedAt: new Date().toISOString() }, ...current]);
+    } catch (error) {
+      setBookingMessage(error.message);
+    }
+  }
+
+  function reorder(items) {
+    const available = items
+      .map((ordered) => ({
+        item: menuItems.find((menuItem) => menuItem.id === ordered.menuItemId && menuItem.available !== false),
+        quantity: ordered.quantity,
+      }))
+      .filter(({ item }) => item);
+    if (available.length === 0) {
+      setBookingMessage("None of the dishes from that order are currently available.");
+      return;
+    }
+    setCart((current) => {
+      const next = [...current];
+      for (const { item, quantity } of available) {
+        const existing = next.find((cartItem) => cartItem.id === item.id);
+        if (existing) existing.quantity = Math.min(20, existing.quantity + quantity);
+        else next.push({ ...item, quantity: Math.min(20, quantity) });
+      }
+      return next;
+    });
+    setCartNotice("Your previous dishes are back in your bag");
+    setCartOpen(true);
+  }
+
   function acceptCustomerSignIn(user) {
     setCustomerUser(user);
     setAuthOpen(false);
@@ -742,6 +875,9 @@ function App() {
       if (!response.ok) throw new Error("We couldn't sign you out. Please try again.");
       setCustomerUser(null);
       setCustomerReservations([]);
+      setCustomerEngagement(null);
+      setCustomerFavorites([]);
+      setCustomerOrders([]);
     } catch (error) {
       setBookingMessage(error.message);
     }
@@ -815,7 +951,12 @@ function App() {
           customerName: form.get("customerName"),
           customerEmail: form.get("customerEmail"),
           phone: form.get("phone"),
-          orderType: form.get("orderType"),
+          orderType: checkoutOrderType,
+          deliveryAddress: form.get("deliveryAddress"),
+          deliveryAreaId: form.get("deliveryAreaId") ? Number(form.get("deliveryAreaId")) : null,
+          dealCode: form.get("dealCode"),
+          useRewards,
+          tableId: qrTableId,
           items: cart.map(({ id, quantity }) => ({ id, quantity })),
         }),
       });
@@ -824,6 +965,7 @@ function App() {
       if (typeof result.paymentUrl !== "string") {
         throw new Error("The order was saved, but secure payment checkout was not returned. Contact the restaurant with your order number.");
       }
+      setUseRewards(false);
       window.location.assign(result.paymentUrl);
     } catch (error) {
       setOrderMessage(error.message);
@@ -1087,6 +1229,11 @@ function App() {
           </div>
         </section>
 
+        {qrTableId && <section className="mx-auto mt-5 flex max-w-7xl flex-wrap items-center justify-between gap-4 rounded-3xl bg-[#e9eee4] px-5 py-4 md:px-8" role="status">
+          <div><span className="text-xs font-bold uppercase tracking-[.16em] text-leaf">Table ordering</span><p className="mt-1 text-sm font-semibold">{qrTableName || `Table ${qrTableId}`} · Browse and order from your seat.</p></div>
+          <a href="/menu" onClick={(event) => navigate(event, "/menu")} className="rounded-full bg-forest px-4 py-2.5 text-sm font-semibold text-white">Browse menu <ArrowRight size={15} className="ml-1 inline" /></a>
+        </section>}
+
         {featuredItems.length > 0 && <section
           ref={featuredSectionRef}
           className="featured-scroll-section"
@@ -1152,6 +1299,46 @@ function App() {
           <a href="/menu" onClick={(event) => navigate(event, "/menu")} className="landing-feature-banner"><span>OUR TABLE, YOUR WAY</span><strong>Ghanaian favourites.<br />A seat for everyone.</strong><span className="landing-feature-cta">See what's cooking <ArrowRight size={15} /></span><span className="landing-sunburst" aria-hidden="true">✳</span></a>
         </section>
 
+        {optionsError && <p role="alert" className="mx-auto max-w-7xl px-5 py-3 text-sm text-sky-950 md:px-10">{optionsError}</p>}
+
+        {restaurantOptions.deals.length > 0 && <section className="mx-auto max-w-7xl px-5 py-10 md:px-10" aria-labelledby="specials-heading">
+          <div className="mb-5 flex flex-wrap items-end justify-between gap-3"><div><span className="text-xs font-bold uppercase tracking-[.2em] text-leaf">Fresh offers</span><h2 id="specials-heading" className="mt-2 font-display text-3xl font-semibold">Today's specials<span>.</span></h2></div><span className="text-xs text-forest/55">Enter an offer code at checkout.</span></div>
+          <div className="grid gap-4 md:grid-cols-2">{restaurantOptions.deals.map((deal) => <article className="flex flex-wrap items-center justify-between gap-4 rounded-3xl bg-[#e9eee4] p-5 sm:p-6" key={deal.id}>
+            <div><span className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[.16em] text-leaf"><Gift size={15} /> Meal deal</span><h3 className="mt-2 font-display text-xl font-semibold">{deal.title}</h3><p className="mt-1 max-w-lg text-sm leading-6 text-forest/65">{deal.description}</p><span className="mt-3 inline-block rounded-full bg-white px-3 py-1.5 font-mono text-xs font-bold tracking-wider">{deal.code}</span></div>
+            <button type="button" className="rounded-full bg-forest px-4 py-2.5 text-sm font-semibold text-white hover:bg-leaf" onClick={() => {
+              setDealCode(deal.code);
+              if (cart.length) setCheckoutOpen(true);
+              else {
+                const menuUrl = qrTableId ? `/menu?table=${encodeURIComponent(qrTableId)}` : "/menu";
+                window.history.pushState({}, "", menuUrl);
+                setIsMenuPage(true);
+                setIsApplicationPage(false);
+                setIsAboutPage(false);
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }
+            }}>{cart.length ? `Use offer · save ${money(deal.discount)}` : `Shop the offer · save ${money(deal.discount)}`}</button>
+          </article>)}</div>
+        </section>}
+
+        <section id="my-orderpulse" className="mx-auto max-w-7xl scroll-mt-8 px-5 py-10 md:px-10" aria-labelledby="my-orderpulse-heading">
+          <div className="flex flex-wrap items-end justify-between gap-4"><div><span className="text-xs font-bold uppercase tracking-[.2em] text-leaf">Your table, your favourites</span><h2 id="my-orderpulse-heading" className="mt-2 font-display text-3xl font-semibold">Your OrderPulse<span>.</span></h2></div>
+            {!customerUser && <button type="button" className="staff-primary" onClick={() => { setAuthMode("login"); setAuthOpen(true); }}>Sign in for rewards and saved dishes</button>}
+          </div>
+          {customerUser ? <div className="mt-6 grid gap-5 lg:grid-cols-[.8fr_1.2fr]">
+            <article className="rounded-3xl bg-forest p-6 text-white"><span className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[.16em] text-lime"><Gift size={16} /> OrderPulse rewards</span><p className="mt-4 font-display text-4xl font-semibold">{customerEngagement?.points ?? "—"} <span className="text-base font-medium text-white/65">points</span></p><p className="mt-2 text-sm text-white/75">Earn 1 point for each GH₵1 spent on completed orders. Redeem 100 points for GH₵5 off.</p>
+              <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/20"><span className="block h-full rounded-full bg-lime transition-all" style={{ width: `${Math.min(100, ((customerEngagement?.points || 0) % 100))}%` }} /></div><p className="mt-2 text-xs text-white/70">{customerEngagement ? `${customerEngagement.pointsToNextReward} points until your next GH₵5 reward` : "Loading your rewards…"}</p>
+            </article>
+            <div className="grid gap-5">
+              <section className="rounded-3xl bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><h3 className="font-display text-xl font-semibold">Saved dishes <span className="text-sm text-forest/50">({customerFavorites.length})</span></h3><Heart size={18} className="text-rose-700" /></div>
+                {customerFavorites.length ? <div className="mt-4 grid gap-3 sm:grid-cols-2">{customerFavorites.slice(0, 4).map((item) => <div key={item.id} className="flex items-center gap-3 rounded-2xl bg-cream p-3"><img src={item.imageUrl} alt="" onError={handleMenuImageError} className="h-14 w-14 rounded-xl object-cover" /><div className="min-w-0 flex-1"><strong className="block truncate text-sm">{item.name}</strong><span className="text-xs text-forest/55">{money(item.price)}</span></div><button type="button" disabled={item.available === false} onClick={() => updateQuantity(item, 1)} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-lime/60" aria-label={`Add ${item.name} to bag`}><Plus size={16} /></button></div>)}</div> : <p className="mt-3 text-sm text-forest/55">Tap the heart on any dish to save it here.</p>}
+              </section>
+              <section className="rounded-3xl bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><h3 className="font-display text-xl font-semibold">Order again</h3><RotateCcw size={18} className="text-leaf" /></div>
+                {customerOrders.length ? <div className="mt-3 divide-y divide-forest/10">{customerOrders.slice(0, 3).map((order) => <div key={order.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div><strong className="text-sm">{displayOrderNumber(order.orderNumber)}</strong><p className="mt-1 text-xs text-forest/55">{order.items.map((item) => `${item.quantity}× ${item.name}`).join(", ")} · {money(order.total)}</p></div><button type="button" className="rounded-full border border-forest/15 px-3 py-2 text-xs font-semibold hover:border-leaf" onClick={() => reorder(order.items)}>Reorder</button></div>)}</div> : <p className="mt-3 text-sm text-forest/55">Your past orders will show up here.</p>}
+              </section>
+            </div>
+          </div> : <p className="mt-3 max-w-2xl text-sm leading-6 text-forest/60">Create an account to keep your favourite dishes, quickly reorder, and collect points on completed orders.</p>}
+        </section>
+
         <section className="home-menu-section" aria-labelledby="home-menu-heading">
           <div className="home-menu-heading">
             <div>
@@ -1176,7 +1363,8 @@ function App() {
                 : <div className="home-menu-grid">{homeMenuItems.map((item) => <article className="home-menu-card" key={item.id}>
                   <div className="home-menu-photo">
                     <img src={item.imageUrl} alt={item.name} onError={handleMenuImageError} loading="lazy" />
-                    <span>{item.badge || (item.category === "Local food" ? "Ghanaian favourite" : "Made fresh")}</span>
+                    <span>{item.badge || (item.popularity > 0 ? "Popular this week" : item.category === "Local food" ? "Ghanaian favourite" : "Made fresh")}</span>
+                    <button type="button" onClick={() => toggleFavorite(item)} className="absolute right-3 top-3 grid h-10 w-10 place-items-center rounded-full bg-white/90 text-rose-700 shadow" aria-label={`${customerFavorites.some((favorite) => favorite.id === item.id) ? "Remove" : "Save"} ${item.name} ${customerFavorites.some((favorite) => favorite.id === item.id) ? "from" : "to"} favorites`} aria-pressed={customerFavorites.some((favorite) => favorite.id === item.id)}><Heart size={18} fill={customerFavorites.some((favorite) => favorite.id === item.id) ? "currentColor" : "none"} /></button>
                   </div>
                   <div className="home-menu-card-copy">
                     <span className="home-menu-category">{item.category === "Foreign food" ? "Foreign favourites" : item.category}{item.subcategory ? ` · ${item.subcategory}` : ""}</span>
@@ -1270,10 +1458,11 @@ function App() {
                       return <button key={rating} type="button" aria-label={`${rating} ${rating === 1 ? "star" : "stars"}`} aria-pressed={feedbackRating === rating} onClick={() => setFeedbackRating(rating)}><Star size={25} fill={feedbackRating >= rating ? "currentColor" : "none"} /></button>;
                     })}
                   </div>
+                  <p className="text-xs font-semibold text-forest/70" aria-live="polite">{feedbackRating ? `${feedbackRating}/5 · ${["", "Poor", "Fair", "Good", "Very good", "Excellent"][feedbackRating]}` : "Choose a rating from 1 to 5 stars"}</p>
                   <label className="field-label">Anything you’d like us to know? <span className="text-forest/45">(optional)</span><textarea value={feedbackComment} onChange={(event) => setFeedbackComment(event.target.value)} maxLength={1000} rows={3} placeholder="Tell us what went well or what we could improve." /></label>
                   <button type="submit" disabled={!feedbackRating || feedbackBusy} className="staff-primary">{feedbackBusy ? "Sending feedback…" : "Send feedback"}</button>
                 </form>}
-                {trackingOrder.feedback && <div className="order-feedback-thanks" role="status"><strong>{feedbackMessage || "Thank you for rating your meal."}</strong><span>{trackingOrder.feedback.rating}/5 stars{trackingOrder.feedback.comment ? ` · “${trackingOrder.feedback.comment}”` : ""}</span></div>}
+                {trackingOrder.feedback && <div className="order-feedback-thanks" role="status"><strong>{feedbackMessage || "Thank you for rating your meal."}</strong>                <span><span className="feedback-stars" aria-label={`${trackingOrder.feedback.rating} out of 5 stars`}>{Array.from({ length: 5 }, (_, index) => <Star key={index} size={15} fill={index < trackingOrder.feedback.rating ? "currentColor" : "none"} />)}</span> {trackingOrder.feedback.rating}/5 stars{trackingOrder.feedback.comment ? ` · “${trackingOrder.feedback.comment}”` : ""}</span></div>}
               </div>}
             </div>
           </div>
@@ -1409,7 +1598,7 @@ function App() {
               </div>
               <div className="receipt-parties">
                 <section className="receipt-party" aria-label="Customer">
-                  <h3>Billed to</h3><strong>{orderReceipt.customerName}</strong><span>{orderReceipt.phone}</span><span>{orderReceipt.orderType === "dine-in" ? "Dine in" : "Pickup"}</span>
+                  <h3>Billed to</h3><strong>{orderReceipt.customerName}</strong><span>{orderReceipt.phone}</span><span>{orderReceipt.orderType === "delivery" ? `Delivery · ${orderReceipt.deliveryArea || ""}` : orderReceipt.orderType === "dine-in" ? `Dine in${orderReceipt.tableName ? ` · ${orderReceipt.tableName}` : ""}` : "Pickup"}</span>{orderReceipt.deliveryAddress && <span>{orderReceipt.deliveryAddress}</span>}
                 </section>
                 <section className="receipt-party" aria-label="Restaurant">
                   <h3>From</h3><strong>OrderPulse</strong><span>Ahodwo, Kumasi, Ghana</span><span>Ghana</span>
@@ -1423,6 +1612,9 @@ function App() {
               </div>
               <div className="receipt-totals">
                 <div><span>Subtotal</span><span>{money(orderReceipt.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0))}</span></div>
+                {orderReceipt.deliveryFee > 0 && <div><span>Delivery · {orderReceipt.deliveryArea}</span><span>{money(orderReceipt.deliveryFee)}</span></div>}
+                {orderReceipt.dealDiscount > 0 && <div><span>Offer · {orderReceipt.dealCode}</span><span>−{money(orderReceipt.dealDiscount)}</span></div>}
+                {orderReceipt.rewardsDiscount > 0 && <div><span>Rewards redeemed · {orderReceipt.rewardsPointsUsed} points</span><span>−{money(orderReceipt.rewardsDiscount)}</span></div>}
                 <div className="receipt-total-line"><strong>{orderReceipt.paymentStatus === "paid" ? "Total paid" : "Order total"}</strong><strong>{money(orderReceipt.total)}</strong></div>
               </div>
               <div className="receipt-payment-reference">
@@ -1458,21 +1650,36 @@ function App() {
               <h3>Order summary <span>{cartCount} {cartCount === 1 ? "item" : "items"}</span></h3>
               <div className="checkout-items">{cart.map((item) => <div key={item.id} className="checkout-item"><img src={item.imageUrl} alt="" onError={handleMenuImageError} /><div><strong>{item.name}</strong><span>Qty: {item.quantity} · {money(item.price)} each</span></div><b>{money(item.price * item.quantity)}</b></div>)}</div>
               <div className="checkout-total-row"><span>Subtotal</span><strong>{money(subtotal)}</strong></div>
-              <div className="checkout-total-row checkout-total"><span>Total</span><strong>{money(subtotal)}</strong></div>
+              {deliveryFee > 0 && <div className="checkout-total-row"><span>Delivery</span><strong>{money(deliveryFee)}</strong></div>}
+              {dealDiscount > 0 && <div className="checkout-total-row"><span>Deal · {matchingDeal.code}</span><strong>−{money(dealDiscount)}</strong></div>}
+              {rewardsDiscount > 0 && <div className="checkout-total-row"><span>Rewards</span><strong>−{money(rewardsDiscount)}</strong></div>}
+              <div className="checkout-total-row checkout-total"><span>Total</span><strong>{money(checkoutTotal)}</strong></div>
               <p className="checkout-note">Any extras or applicable taxes will be confirmed at the restaurant.</p>
             </section>
             <section className="checkout-section">
               <h3>How are you enjoying your meal?</h3>
-              <label className="field-label checkout-method">Order method<select name="orderType" defaultValue="pickup"><option value="pickup">Pickup · I'll collect my order</option><option value="dine-in">Dine in · I'll eat at the restaurant</option></select><ChevronDown size={14} className="pointer-events-none absolute bottom-4 right-4 text-forest/40" /></label>
+              <label className="field-label checkout-method">Order method<select name="orderType" value={checkoutOrderType} onChange={(event) => setCheckoutOrderType(event.target.value)} disabled={qrTableId !== null}><option value="pickup">Pickup · I'll collect my order</option><option value="dine-in">Dine in · I'll eat at the restaurant</option><option value="delivery">Delivery · bring it to me</option></select><ChevronDown size={14} className="pointer-events-none absolute bottom-4 right-4 text-forest/40" /></label>
+              {qrTableId && <p className="rounded-xl bg-[#e9eee4] p-3 text-xs text-forest/70">Table ordering selected · Table {qrTableId}. Your order will be sent to the kitchen for this table.</p>}
+              {checkoutOrderType === "delivery" && <div className="grid gap-3">
+                <label className="field-label">Delivery area<select required name="deliveryAreaId" value={deliveryAreaId} onChange={(event) => setDeliveryAreaId(event.target.value)}><option value="">Select your area</option>{restaurantOptions.deliveryAreas.map((area) => <option key={area.id} value={area.id}>{area.name} · {money(area.fee)}</option>)}</select></label>
+                {restaurantOptions.deliveryAreas.length === 0 && <p className="text-xs text-amber-800">Delivery areas are not configured yet. Please choose pickup or dine-in, or contact the restaurant.</p>}
+                <label className="field-label">Delivery address<input required name="deliveryAddress" minLength="8" maxLength="500" autoComplete="street-address" placeholder="Street, house number, and nearby landmark" /></label>
+              </div>}
+              <label className="field-label">Offer code (optional)<input name="dealCode" value={dealCode} onChange={(event) => setDealCode(event.target.value.toUpperCase())} maxLength="40" list="active-deal-codes" placeholder="Enter a meal-deal code" /></label>
+              <datalist id="active-deal-codes">{restaurantOptions.deals.map((deal) => <option key={deal.id} value={deal.code}>{deal.title} · save {money(deal.discount)}</option>)}</datalist>
+              {dealCode.trim() && !matchingDeal && <p className="text-xs text-amber-800">That code is not currently active. Check the specials above or correct the code.</p>}
+              {matchingDeal && <p className="text-xs text-leaf">{matchingDeal.title} · {matchingDeal.description}</p>}
+              {customerUser && (customerEngagement?.points || 0) >= 100 && subtotal - dealDiscount >= 5 && <label className="flex items-start gap-3 rounded-xl bg-[#e9eee4] p-3 text-sm"><input type="checkbox" checked={useRewards} onChange={(event) => setUseRewards(event.target.checked)} /><span>Use 100 points for up to GH₵5 off <small className="block text-xs text-forest/60">Available points: {customerEngagement.points}</small></span></label>}
+              {customerUser && (customerEngagement?.points || 0) >= 100 && subtotal - dealDiscount < 5 && <p className="text-xs text-forest/60">Add at least GH₵5 of menu items after offers to redeem your 100-point reward.</p>}
             </section>
             <section className="checkout-section checkout-payment"><span className="checkout-payment-icon"><ShoppingBag size={18} /></span><div><h3>Secure payment by Paystack</h3><p>After placing your order, you’ll be redirected to Paystack to pay securely. The kitchen will only receive your order after Paystack confirms payment.</p></div></section>
             <section className="checkout-section checkout-contact">
               <h3>Your contact details</h3>
-              <label className="field-label">Your name<input required name="customerName" minLength="2" maxLength="80" autoComplete="name" placeholder="e.g. Ama Mensah" /></label>
-              <label className="field-label">Email for your receipt<input required name="customerEmail" type="email" maxLength="254" autoComplete="email" placeholder="you@example.com" /></label>
-              <label className="field-label">Phone number<input required name="phone" minLength="7" maxLength="30" type="tel" autoComplete="tel" placeholder="+233 24 000 0000" /></label>
+              <label className="field-label">Your name<input required name="customerName" minLength="2" maxLength="80" autoComplete="name" defaultValue={customerUser?.name || ""} placeholder="e.g. Ama Mensah" /></label>
+              <label className="field-label">Email for your receipt<input required name="customerEmail" type="email" maxLength="254" autoComplete="email" defaultValue={customerUser?.email || ""} placeholder="you@example.com" /></label>
+              <label className="field-label">Phone number<input required name="phone" minLength="7" maxLength="30" type="tel" autoComplete="tel" defaultValue={customerUser?.phone || ""} placeholder="+233 24 000 0000" /></label>
             </section>
-            <button disabled={busy || cart.length === 0} className="checkout-submit">{busy ? "Placing your order…" : `Place order · ${money(subtotal)}`}</button>
+            <button disabled={busy || cart.length === 0 || checkoutTotal <= 0 || (checkoutOrderType === "delivery" && !deliveryAreaId)} className="checkout-submit">{busy ? "Placing your order…" : `Place order · ${money(checkoutTotal)}`}</button>
             {orderMessage && <p role="alert" className="mt-4 rounded-xl bg-sky-50 p-3 text-sm text-sky-950">{orderMessage}</p>}
             <p className="checkout-footnote">You’ll continue to Paystack to complete payment. After payment is verified, you can download or print your PDF receipt. Track your order with the order number and checkout phone.</p>
           </div>

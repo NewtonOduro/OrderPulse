@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { db } from "../database/database.js";
 import { createEmailAuthToken } from "../services/email-auth.js";
+import { readLoyaltyBalance } from "../services/loyalty.js";
 import { sendCareerApplicationNotifications, sendOrderNotifications, sendReservationNotifications, sendPaymentConfirmationEmail, sendVerificationEmail } from "../services/order-notifications.js";
 import { getAvailableTables, reservationDurationMinutes } from "../services/reservation-availability.js";
 import { hasValidPaystackSignature, initializePaystackTransaction, verifyPaystackTransaction } from "../services/paystack.js";
@@ -176,19 +177,36 @@ export const createOrder = async (request, response) => {
   if (!process.env.PAYSTACK_SECRET_KEY?.trim()) {
     return response.status(503).json({ error: "Online payments are not configured yet. Please try again later." });
   }
-  const { customerName, customerEmail, phone, orderType, items } = request.body ?? {};
+  const {
+    customerName,
+    customerEmail,
+    phone,
+    orderType,
+    items,
+    deliveryAddress,
+    deliveryAreaId,
+    dealCode = "",
+    useRewards = false,
+    tableId = null,
+  } = request.body ?? {};
   if (
     !validText(customerName, 2, 80) ||
     typeof customerEmail !== "string" ||
     customerEmail.length > 254 ||
     !emailPattern.test(customerEmail.trim()) ||
     !validText(phone, 7, 30) ||
-    !["pickup", "dine-in"].includes(orderType) ||
+    !["pickup", "dine-in", "delivery"].includes(orderType) ||
     !Array.isArray(items) ||
     items.length === 0 ||
-    items.length > 30
+    items.length > 30 ||
+    (orderType === "delivery" && (!validText(deliveryAddress, 8, 500) || !Number.isSafeInteger(deliveryAreaId) || deliveryAreaId < 1)) ||
+    (orderType !== "delivery" && (deliveryAddress || deliveryAreaId)) ||
+    (tableId !== null && (!Number.isSafeInteger(tableId) || tableId < 1 || orderType !== "dine-in")) ||
+    (typeof dealCode !== "string" || dealCode.trim().length > 40) ||
+    typeof useRewards !== "boolean" ||
+    (useRewards && request.user?.role !== "customer")
   ) {
-    return response.status(400).json({ error: "Enter your name, valid email and phone number, order type and at least one item." });
+    return response.status(400).json({ error: "Check your contact details, order type, delivery address, table, deal code and selected items." });
   }
 
   const quantities = new Map();
@@ -228,15 +246,87 @@ export const createOrder = async (request, response) => {
           if (result.changes !== 1) throw new Error("MENU_ITEM_STOCK_INSUFFICIENT");
         }
       }
-      const totalPesewas = resolvedItems.reduce(
+      const subtotalPesewas = resolvedItems.reduce(
         (total, { item, quantity }) => total + item.price_pesewas * quantity,
         0,
       );
+      let deliveryFeePesewas = 0;
+      let savedDeliveryArea = null;
+      if (orderType === "delivery") {
+        savedDeliveryArea = await tx.get(
+          "SELECT id, area_name, fee_pesewas FROM delivery_areas WHERE id = ? AND enabled = TRUE",
+          [deliveryAreaId],
+        );
+        if (!savedDeliveryArea) throw new Error("DELIVERY_AREA_UNAVAILABLE");
+        deliveryFeePesewas = savedDeliveryArea.fee_pesewas;
+      }
+      const savedTable = tableId === null
+        ? null
+        : await tx.get("SELECT id, name FROM restaurant_tables WHERE id = ?", [tableId]);
+      if (tableId !== null && !savedTable) {
+        throw new Error("RESTAURANT_TABLE_NOT_FOUND");
+      }
+      let savedDeal = null;
+      if (dealCode.trim()) {
+        savedDeal = await tx.get(`
+          SELECT id, code, discount_pesewas
+          FROM restaurant_deals
+          WHERE UPPER(code) = UPPER(?) AND active = TRUE
+            AND (starts_at IS NULL OR starts_at <= ?)
+            AND (ends_at IS NULL OR ends_at > ?)
+        `, [dealCode.trim(), new Date().toISOString(), new Date().toISOString()]);
+        if (!savedDeal) throw new Error("DEAL_UNAVAILABLE");
+      }
+      const dealDiscountPesewas = savedDeal
+        ? Math.min(subtotalPesewas, savedDeal.discount_pesewas)
+        : 0;
+      if (useRewards && subtotalPesewas - dealDiscountPesewas < 500) {
+        throw new Error("REWARDS_ORDER_MINIMUM");
+      }
+      let rewardsPointsUsed = 0;
+      if (useRewards) {
+        await tx.get("SELECT id FROM users WHERE id = ? FOR UPDATE", [request.user.id]);
+        const points = await readLoyaltyBalance(tx, request.user.id);
+        if (points.earned - points.reserved < 100) {
+          throw new Error("LOYALTY_POINTS_INSUFFICIENT");
+        }
+        rewardsPointsUsed = 100;
+      }
+      const rewardsDiscountPesewas = rewardsPointsUsed ? 500 : 0;
+      const appliedRewardsDiscountPesewas = Math.min(
+        rewardsDiscountPesewas,
+        subtotalPesewas - dealDiscountPesewas,
+      );
+      const totalPesewas = subtotalPesewas + deliveryFeePesewas -
+        dealDiscountPesewas - appliedRewardsDiscountPesewas;
+      if (totalPesewas <= 0) throw new Error("ORDER_TOTAL_ZERO");
       const orderNumber = `GH-${randomBytes(16).toString("hex").toUpperCase()}`;
       const insertedOrder = await tx.run(`
-        INSERT INTO orders (order_number, customer_name, customer_email, phone, order_type, total_pesewas, status, payment_status, payment_reference)
-        VALUES (?, ?, ?, ?, ?, ?, 'awaiting_payment', 'pending', ?)
-      `, [orderNumber, customerName.trim(), customerEmail.trim().toLowerCase(), phone.trim(), orderType, totalPesewas, orderNumber]);
+        INSERT INTO orders (
+          order_number, customer_name, customer_email, phone, order_type, total_pesewas,
+          status, payment_status, payment_reference, customer_user_id, table_id,
+          delivery_address, delivery_area, delivery_fee_pesewas, deal_code,
+          deal_discount_pesewas, rewards_points_used, rewards_discount_pesewas
+        )
+        VALUES (?, ?, ?, ?, ?, ?, 'awaiting_payment', 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        orderNumber,
+        customerName.trim(),
+        customerEmail.trim().toLowerCase(),
+        phone.trim(),
+        orderType,
+        totalPesewas,
+        orderNumber,
+        request.user?.role === "customer" ? request.user.id : null,
+        tableId,
+        orderType === "delivery" ? deliveryAddress.trim() : null,
+        savedDeliveryArea?.area_name || null,
+        deliveryFeePesewas,
+        savedDeal?.code || null,
+        dealDiscountPesewas,
+        rewardsPointsUsed,
+        appliedRewardsDiscountPesewas,
+      ]);
       for (const { item, quantity } of resolvedItems) {
         await tx.run(`
           INSERT INTO order_items (order_id, menu_item_id, item_name, unit_price_pesewas, quantity)
@@ -249,6 +339,16 @@ export const createOrder = async (request, response) => {
         customerEmail: customerEmail.trim().toLowerCase(),
         phone: phone.trim(),
         orderType,
+        tableId,
+        tableName: savedTable?.name || null,
+        deliveryAddress: orderType === "delivery" ? deliveryAddress.trim() : null,
+        deliveryArea: savedDeliveryArea?.area_name || null,
+        deliveryFee: deliveryFeePesewas / 100,
+        subtotal: subtotalPesewas / 100,
+        dealCode: savedDeal?.code || null,
+        dealDiscount: dealDiscountPesewas / 100,
+        rewardsPointsUsed,
+        rewardsDiscount: appliedRewardsDiscountPesewas / 100,
         total: totalPesewas / 100,
         status: "awaiting_payment",
         paymentStatus: "pending",
@@ -283,6 +383,24 @@ export const createOrder = async (request, response) => {
   } catch (error) {
     if (["MENU_ITEM_UNAVAILABLE", "MENU_ITEM_STOCK_INSUFFICIENT"].includes(error.message)) {
       return response.status(409).json({ error: "A selected menu item is unavailable or there isn't enough stock. Refresh the menu and try again." });
+    }
+    if (error.message === "DELIVERY_AREA_UNAVAILABLE") {
+      return response.status(409).json({ error: "Delivery is not available in that area. Refresh the available areas and try again." });
+    }
+    if (error.message === "RESTAURANT_TABLE_NOT_FOUND") {
+      return response.status(400).json({ error: "That table QR code is no longer valid. Please ask restaurant staff for help." });
+    }
+    if (error.message === "DEAL_UNAVAILABLE") {
+      return response.status(409).json({ error: "That offer is not active. Check the code and its dates, then try again." });
+    }
+    if (error.message === "LOYALTY_POINTS_INSUFFICIENT") {
+      return response.status(409).json({ error: "You need at least 100 available reward points to redeem this discount." });
+    }
+    if (error.message === "REWARDS_ORDER_MINIMUM") {
+      return response.status(409).json({ error: "Add at least GH₵5 of menu items after offers to redeem 100 reward points." });
+    }
+    if (error.message === "ORDER_TOTAL_ZERO") {
+      return response.status(400).json({ error: "Your discounts cover the whole order. Add another item before paying." });
     }
     throw error;
   }
@@ -496,7 +614,7 @@ export const createMenuItem = async (request, response) => {
 
 
 async function readTrackedOrder(order) {
-  const [items, feedback] = await Promise.all([
+  const [items, feedback, table] = await Promise.all([
     db.all(`
       SELECT item_name, quantity, unit_price_pesewas
       FROM order_items
@@ -504,12 +622,22 @@ async function readTrackedOrder(order) {
       ORDER BY id
     `, [order.id]),
     db.get("SELECT rating, comment_text, created_at FROM order_feedback WHERE order_id = ?", [order.id]),
+    order.table_id ? db.get("SELECT name FROM restaurant_tables WHERE id = ?", [order.table_id]) : null,
   ]);
   return {
     orderNumber: order.order_number,
     status: order.status,
     paymentStatus: order.payment_status,
     orderType: order.order_type,
+    tableId: order.table_id,
+    tableName: table?.name || null,
+    deliveryAddress: order.delivery_address,
+    deliveryArea: order.delivery_area,
+    deliveryFee: order.delivery_fee_pesewas / 100,
+    dealCode: order.deal_code,
+    dealDiscount: order.deal_discount_pesewas / 100,
+    rewardsPointsUsed: order.rewards_points_used,
+    rewardsDiscount: order.rewards_discount_pesewas / 100,
     total: order.total_pesewas / 100,
     createdAt: order.created_at,
     updatedAt: order.updated_at,

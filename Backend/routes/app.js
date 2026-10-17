@@ -3,10 +3,12 @@ import { rateLimit } from "express-rate-limit";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as adminController from "../Controllers/adminController.js";
+import * as engagementController from "../Controllers/engagementController.js";
 import * as postController from "../Controllers/postController.js";
 import * as userController from "../Controllers/userController.js";
 import {
   auditStaffActivity,
+  optionalUser,
   requireCustomer,
   requireManager,
   requireStaff,
@@ -80,13 +82,19 @@ app.post("/api/auth/logout", userController.logout);
 
 app.get("/api/health", adminController.healthCheck);
 app.get("/api/menu", adminController.publicMenu);
+app.get("/api/restaurant-options", engagementController.restaurantOptions);
 app.post("/api/order-tracking", orderLimiter, postController.trackOrder);
 app.post("/api/order-feedback", feedbackLimiter, postController.submitOrderFeedback);
-app.post("/api/orders", orderLimiter, postController.createOrder);
+app.post("/api/orders", orderLimiter, optionalUser, postController.createOrder);
 app.post("/api/payments/verify", orderLimiter, postController.verifyPayment);
 app.get("/api/reservation-availability", postController.reservationAvailability);
 app.post("/api/bookings", reservationLimiter, requireUser, requireCustomer, postController.createBooking);
 app.get("/api/customer/reservations", requireUser, requireCustomer, userController.customerReservations);
+app.get("/api/customer/engagement", requireUser, requireCustomer, engagementController.customerEngagement);
+app.get("/api/customer/favorites", requireUser, requireCustomer, engagementController.customerFavorites);
+app.post("/api/customer/favorites/:menuItemId", requireUser, requireCustomer, engagementController.addCustomerFavorite);
+app.delete("/api/customer/favorites/:menuItemId", requireUser, requireCustomer, engagementController.removeCustomerFavorite);
+app.get("/api/customer/orders", requireUser, requireCustomer, engagementController.customerOrderHistory);
 
 app.use("/api/staff", requireUser, requireStaff, auditStaffActivity);
 app.use("/api/manager", requireUser, requireManager, auditStaffActivity);
@@ -94,6 +102,12 @@ app.get("/api/manager/summary", adminController.managerSummary);
 app.get("/api/manager/activities", adminController.managerActivities);
 app.get("/api/manager/staff", adminController.managerStaff);
 app.get("/api/manager/applications", adminController.managerApplications);
+app.get("/api/manager/delivery-areas", engagementController.managerDeliveryAreas);
+app.post("/api/manager/delivery-areas", engagementController.createDeliveryArea);
+app.patch("/api/manager/delivery-areas/:id", engagementController.updateDeliveryArea);
+app.get("/api/manager/deals", engagementController.managerDeals);
+app.post("/api/manager/deals", engagementController.createDeal);
+app.patch("/api/manager/deals/:id", engagementController.updateDealStatus);
 app.get("/api/manager/applications/:id/resume", adminController.applicationResume);
 app.post("/api/manager/staff", postController.createStaff);
 app.patch("/api/manager/staff/:id", adminController.updateStaff);

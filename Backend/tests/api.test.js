@@ -301,6 +301,153 @@ test("orders are validated and persisted with a cedi total", async () => {
   assert.ok(feedbackData.feedback.some((entry) => entry.orderNumber === result.orderNumber));
 });
 
+test("customers can save favourites, earn and redeem points, use delivery and meal offers, and order by table QR", async () => {
+  const passwordHash = await bcrypt.hash("customer-feature-test-123", 4);
+  await db.run(`
+    INSERT INTO users (name, email, phone, password_hash, role, email_verified)
+    VALUES (?, ?, ?, ?, 'customer', TRUE)
+  `, ["Feature Customer", "features@test.example", "0241234567", passwordHash]);
+  const login = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "features@test.example", password: "customer-feature-test-123" }),
+  });
+  assert.equal(login.status, 200);
+  const customerCookie = sessionCookie(login);
+  const customerHeaders = { "content-type": "application/json", cookie: customerCookie };
+  const menu = await (await fetch(`${baseUrl}/api/menu`)).json();
+  const menuItem = menu.find((item) => item.price >= 10);
+  assert.ok(menuItem);
+
+  const favoriteAdded = await fetch(`${baseUrl}/api/customer/favorites/${menuItem.id}`, {
+    method: "POST",
+    headers: customerHeaders,
+  });
+  assert.equal(favoriteAdded.status, 204);
+  const favorites = await fetch(`${baseUrl}/api/customer/favorites`, {
+    headers: { cookie: customerCookie },
+  });
+  assert.equal(favorites.status, 200);
+  assert.ok((await favorites.json()).some((item) => item.id === menuItem.id));
+
+  const areaResponse = await fetch(`${baseUrl}/api/manager/delivery-areas`, {
+    method: "POST",
+    headers: { ...customerHeaders, cookie: managerCookie },
+    body: JSON.stringify({ name: "Feature Test Area", fee: 3.5 }),
+  });
+  assert.equal(areaResponse.status, 201);
+  const area = await areaResponse.json();
+  const dealResponse = await fetch(`${baseUrl}/api/manager/deals`, {
+    method: "POST",
+    headers: { ...customerHeaders, cookie: managerCookie },
+    body: JSON.stringify({
+      title: "Feature test special",
+      description: "A test-only GH₵5 discount.",
+      code: "FEATURE5",
+      discount: 5,
+    }),
+  });
+  assert.equal(dealResponse.status, 201);
+  const options = await (await fetch(`${baseUrl}/api/restaurant-options`)).json();
+  assert.ok(options.deliveryAreas.some((option) => option.id === area.id && option.fee === 3.5));
+  assert.ok(options.deals.some((deal) => deal.code === "FEATURE5"));
+  assert.ok(options.tables.length > 0);
+
+  const subtotalPesewas = Math.round(menuItem.price * 20 * 100);
+  const placeOrder = (payload) => fetch(`${baseUrl}/api/orders`, {
+    method: "POST",
+    headers: customerHeaders,
+    body: JSON.stringify(payload),
+  });
+  const firstOrderResponse = await placeOrder({
+    customerName: "Feature Customer",
+    customerEmail: "features@test.example",
+    phone: "0241234567",
+    orderType: "pickup",
+    items: [{ id: menuItem.id, quantity: 20 }],
+  });
+  assert.equal(firstOrderResponse.status, 201);
+  const firstOrder = await firstOrderResponse.json();
+  const firstPayment = await fetch(`${baseUrl}/api/payments/verify`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ reference: firstOrder.reference }),
+  });
+  assert.equal(firstPayment.status, 200);
+  const firstOrderRow = await db.get("SELECT id FROM orders WHERE order_number = ?", [firstOrder.orderNumber]);
+  const completed = await fetch(`${baseUrl}/api/staff/orders/${firstOrderRow.id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", cookie: managerCookie },
+    body: JSON.stringify({ status: "completed" }),
+  });
+  assert.equal(completed.status, 200);
+  const engagement = await fetch(`${baseUrl}/api/customer/engagement`, {
+    headers: { cookie: customerCookie },
+  });
+  assert.equal(engagement.status, 200);
+  assert.ok((await engagement.json()).points >= 100);
+
+  const deliveryResponse = await placeOrder({
+    customerName: "Feature Customer",
+    customerEmail: "features@test.example",
+    phone: "0241234567",
+    orderType: "delivery",
+    deliveryAreaId: area.id,
+    deliveryAddress: "12 Example Road, near the main junction",
+    dealCode: "FEATURE5",
+    useRewards: true,
+    items: [{ id: menuItem.id, quantity: 20 }],
+  });
+  assert.equal(deliveryResponse.status, 201);
+  const deliveryOrder = await deliveryResponse.json();
+  assert.equal(deliveryOrder.deliveryFee, 3.5);
+  assert.equal(deliveryOrder.dealDiscount, 5);
+  assert.equal(deliveryOrder.rewardsPointsUsed, 100);
+  assert.equal(deliveryOrder.rewardsDiscount, 5);
+  assert.equal(Math.round(deliveryOrder.total * 100), subtotalPesewas + 350 - 500 - 500);
+  const trackedDelivery = await fetch(`${baseUrl}/api/order-tracking`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ orderNumber: deliveryOrder.orderNumber, phone: "0241234567" }),
+  });
+  const deliveryData = await trackedDelivery.json();
+  assert.equal(deliveryData.deliveryArea, "Feature Test Area");
+  assert.equal(deliveryData.deliveryAddress, "12 Example Road, near the main junction");
+  assert.equal(deliveryData.rewardsPointsUsed, 100);
+  const deliveryRow = await db.get("SELECT id FROM orders WHERE order_number = ?", [deliveryOrder.orderNumber]);
+  const kitchenOrders = await fetch(`${baseUrl}/api/staff/orders`, { headers: { cookie: managerCookie } });
+  assert.ok((await kitchenOrders.json()).some((order) => order.id === deliveryRow.id && order.deliveryAddress));
+
+  const qrOrderResponse = await placeOrder({
+    customerName: "Feature Customer",
+    customerEmail: "features@test.example",
+    phone: "0241234567",
+    orderType: "dine-in",
+    tableId: options.tables[0].id,
+    items: [{ id: menuItem.id, quantity: 1 }],
+  });
+  assert.equal(qrOrderResponse.status, 201);
+  const qrOrder = await qrOrderResponse.json();
+  const qrOrderRow = await db.get("SELECT table_id FROM orders WHERE order_number = ?", [qrOrder.orderNumber]);
+  assert.equal(qrOrderRow.table_id, options.tables[0].id);
+  const history = await fetch(`${baseUrl}/api/customer/orders`, { headers: { cookie: customerCookie } });
+  assert.ok((await history.json()).some((order) => order.orderNumber === qrOrder.orderNumber && order.items[0].menuItemId === menuItem.id));
+
+  const favoriteRemoved = await fetch(`${baseUrl}/api/customer/favorites/${menuItem.id}`, {
+    method: "DELETE",
+    headers: customerHeaders,
+  });
+  assert.equal(favoriteRemoved.status, 204);
+  const disabledArea = await fetch(`${baseUrl}/api/manager/delivery-areas/${area.id}`, {
+    method: "PATCH",
+    headers: { ...customerHeaders, cookie: managerCookie },
+    body: JSON.stringify({ fee: area.fee, enabled: false }),
+  });
+  assert.equal(disabledArea.status, 200);
+  const refreshedOptions = await (await fetch(`${baseUrl}/api/restaurant-options`)).json();
+  assert.ok(!refreshedOptions.deliveryAreas.some((option) => option.id === area.id));
+});
+
 test("managers publish staff announcements and staff can mark them as read", async () => {
   const announcementPayload = {
     category: "employee_of_month",
@@ -437,8 +584,8 @@ test("customers must create an account or sign in before reserving", async () =>
   const storedVerificationToken = await db.get("SELECT token_hash, expires_at FROM email_auth_tokens WHERE purpose = 'verify_email' ORDER BY id DESC LIMIT 1");
   assert.equal(storedVerificationToken.token_hash, createHash("sha256").update(verificationToken).digest("hex"));
   const verificationExpiryMs = Date.parse(storedVerificationToken.expires_at);
-  assert.ok(verificationExpiryMs >= Date.now() + 25_000);
-  assert.ok(verificationExpiryMs <= Date.now() + 30_000);
+  assert.ok(verificationExpiryMs >= Date.now() + 24 * 60 * 60 * 1000 - 5_000);
+  assert.ok(verificationExpiryMs <= Date.now() + 24 * 60 * 60 * 1000);
   const verification = await fetch(`${baseUrl}/api/auth/verify-email`, {
     method: "POST",
     headers: { "content-type": "application/json" },

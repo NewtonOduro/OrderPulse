@@ -8,9 +8,12 @@ OrderPulse uses parameterized SQL through its database adapter rather than an OR
 | `sessions` | Hashed session-token records with expiry, related to `users`. |
 | `email_auth_tokens` | Hashed, single-use verification and password-reset tokens, related to `users`. |
 | `menu_items` | Menu descriptions, category placement, pesewa prices, availability, and optional inventory counts. |
-| `orders` | Customer checkout, payment reference/state, order state, and total in pesewas. |
+| `orders` | Customer checkout, payment reference/state, order state, pesewa total, account/table, delivery details, offer discount, and loyalty redemption. |
 | `order_items` | Snapshot of ordered item name, price, and quantity; related to `orders` and `menu_items`. |
 | `restaurant_tables` | Table name, seating capacity, and availability state. |
+| `delivery_areas` | Manager-configured delivery neighbourhoods, flat fees in pesewas, and availability. |
+| `restaurant_deals` | Manager-published discount codes, fixed pesewa discounts, and optional active dates. |
+| `customer_favorites` | Customer account links to saved menu items. |
 | `bookings` | Customer reservation details, optional account/table links, and reservation state. |
 | `activity_logs` | Staff/manager audit events; actor identity is retained even if its user record is removed. |
 | `job_applications` | Career application data and uploaded resume bytes. |

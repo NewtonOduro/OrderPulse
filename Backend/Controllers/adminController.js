@@ -482,14 +482,26 @@ export const markStaffAnnouncementRead = async (request, response) => {
 
 export const healthCheck = (_request, response) => response.json({ status: "ok" });
 
-export const publicMenu = async (_request, response) =>
-  response.json(
-    (await getMenuItems())
-      .map(publicMenuItem)
-      .sort((first, second) =>
-        menuCategories.indexOf(first.category) - menuCategories.indexOf(second.category) ||
-        first.id - second.id,
-      ),
-  );
+export const publicMenu = async (_request, response) => {
+  const [items, popular] = await Promise.all([
+    getMenuItems(),
+    db.all(`
+      SELECT oi.menu_item_id, SUM(oi.quantity) AS quantity
+      FROM order_items oi JOIN orders o ON o.id = oi.order_id
+      WHERE o.payment_status = 'paid' AND o.status != 'cancelled'
+      GROUP BY oi.menu_item_id
+    `),
+  ]);
+  const quantities = new Map(popular.map((item) => [Number(item.menu_item_id), Number(item.quantity)]));
+  return response.json(items
+    .map((item) => ({
+      ...publicMenuItem(item),
+      popularity: quantities.get(Number(item.id)) || 0,
+    }))
+    .sort((first, second) =>
+      menuCategories.indexOf(first.category) - menuCategories.indexOf(second.category) ||
+      first.id - second.id,
+    ));
+};
 
 export const staffOrders = async (_request, response) => response.json(await readOrders());

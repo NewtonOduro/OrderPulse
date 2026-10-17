@@ -8,9 +8,12 @@ import {
   Eye,
   EyeOff,
   FileText,
+  Gift,
   LayoutDashboard,
   LogOut,
+  MapPin,
   Plus,
+  QrCode,
   RefreshCw,
   ShieldCheck,
   Star,
@@ -18,6 +21,7 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
+import QRCode from "qrcode";
 import { beverageGroups, beverageSubcategories, menuCategories } from "./menu-categories.js";
 import { displayOrderNumber } from "./order-number.js";
 
@@ -33,6 +37,8 @@ const tabs = [
   { id: "activity", label: "Team activity", icon: Activity, managerOnly: true },
   { id: "applications", label: "Job applications", icon: FileText, managerOnly: true },
   { id: "team", label: "Staff accounts", icon: ShieldCheck, managerOnly: true },
+  { id: "offers", label: "Meal deals", icon: Gift, managerOnly: true },
+  { id: "delivery", label: "Delivery areas", icon: MapPin, managerOnly: true },
 ];
 const orderStatuses = ["received", "preparing", "ready", "completed", "cancelled"];
 const orderStatusLabels = { awaiting_payment: "Awaiting payment" };
@@ -93,6 +99,8 @@ function StaffDashboard({ onExit, isOnline }) {
   const [activities, setActivities] = useState([]);
   const [applications, setApplications] = useState([]);
   const [staffUsers, setStaffUsers] = useState([]);
+  const [deliveryAreas, setDeliveryAreas] = useState([]);
+  const [deals, setDeals] = useState([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -140,14 +148,18 @@ function StaffDashboard({ onExit, isOnline }) {
     }
     knownOrderStates.current = currentStates;
     if (role === "manager") {
-      const [nextActivities, nextStaff, nextApplications] = await Promise.all([
+      const [nextActivities, nextStaff, nextApplications, nextDeliveryAreas, nextDeals] = await Promise.all([
         request("/api/manager/activities"),
         request("/api/manager/staff"),
         request("/api/manager/applications"),
+        request("/api/manager/delivery-areas"),
+        request("/api/manager/deals"),
       ]);
       setActivities(nextActivities);
       setStaffUsers(nextStaff);
       setApplications(nextApplications);
+      setDeliveryAreas(nextDeliveryAreas);
+      setDeals(nextDeals);
     }
   }, []);
 
@@ -241,6 +253,8 @@ function StaffDashboard({ onExit, isOnline }) {
     setActivities([]);
     setApplications([]);
     setStaffUsers([]);
+    setDeliveryAreas([]);
+    setDeals([]);
     setAnnouncements([]);
     setFeedbackSummary({ count: 0, averageRating: 0, feedback: [] });
     knownOrderStates.current = null;
@@ -330,6 +344,8 @@ function StaffDashboard({ onExit, isOnline }) {
         {activeTab === "activity" && user.role === "manager" && <ManagerActivity activities={activities} />}
         {activeTab === "applications" && user.role === "manager" && <JobApplications applications={applications} />}
         {activeTab === "team" && user.role === "manager" && <TeamManagement users={staffUsers} busy={busy} onAction={runAction} />}
+        {activeTab === "offers" && user.role === "manager" && <DealsManagement deals={deals} busy={busy} onAction={runAction} />}
+        {activeTab === "delivery" && user.role === "manager" && <DeliveryManagement areas={deliveryAreas} busy={busy} onAction={runAction} />}
       </main>
     </div>
   );
@@ -424,8 +440,72 @@ function TeamManagement({ users, busy, onAction }) {
   </section>;
 }
 
+function DeliveryManagement({ areas, busy, onAction }) {
+  function addArea(event) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const payload = { name: form.get("name"), fee: Number(form.get("fee")) };
+    onAction(async () => {
+      await request("/api/manager/delivery-areas", null, { method: "POST", body: JSON.stringify(payload) });
+      formElement.reset();
+    }, "Delivery area added.");
+  }
+
+  return <section className="staff-content">
+    <div className="staff-section-intro"><div><h2>Delivery service areas</h2><p>Only enabled areas appear at checkout. Set the delivery fee for each neighbourhood.</p></div><span className="staff-count">{areas.filter((area) => area.enabled).length} active areas</span></div>
+    <form className="staff-inline-form" onSubmit={addArea}><input name="name" required minLength="2" maxLength="120" placeholder="Area or neighbourhood" /><input name="fee" required type="number" min="0" max="10000" step="0.01" placeholder="Fee in GH₵" aria-label="Delivery fee in Ghana cedis" /><button disabled={busy} className="staff-primary staff-small"><Plus size={15} /> Add area</button></form>
+    <div className="staff-panel staff-team-list"><div className="staff-panel-head"><div><h2>Configured areas</h2><p>Delivery orders can only be placed into active areas.</p></div></div>
+      {areas.map((area) => <div className="staff-list-row" key={area.id}><div className="staff-row-avatar"><MapPin size={16} /></div><div className="staff-row-main"><strong>{area.name}</strong><small>Delivery fee · {money(area.fee)}</small></div><StatusPill>{area.enabled ? "available" : "cancelled"}</StatusPill><button disabled={busy} className="staff-secondary" onClick={() => onAction(() => request(`/api/manager/delivery-areas/${area.id}`, null, { method: "PATCH", body: JSON.stringify({ fee: area.fee, enabled: !area.enabled }) }), `${area.name} ${area.enabled ? "paused" : "enabled"}.`)}>{area.enabled ? "Pause" : "Enable"}</button></div>)}
+      {areas.length === 0 && <EmptyState>Add the neighbourhoods where the restaurant can deliver.</EmptyState>}
+    </div>
+  </section>;
+}
+
+function DealsManagement({ deals, busy, onAction }) {
+  function addDeal(event) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const startsAt = form.get("startsAt");
+    const endsAt = form.get("endsAt");
+    const payload = {
+      title: form.get("title"),
+      description: form.get("description"),
+      code: form.get("code"),
+      discount: Number(form.get("discount")),
+      startsAt: startsAt ? new Date(startsAt).toISOString() : null,
+      endsAt: endsAt ? new Date(endsAt).toISOString() : null,
+    };
+    onAction(async () => {
+      await request("/api/manager/deals", null, { method: "POST", body: JSON.stringify(payload) });
+      formElement.reset();
+    }, "Meal deal published.");
+  }
+
+  return <section className="staff-content">
+    <div className="staff-section-intro"><div><h2>Meal deals and specials</h2><p>Create a code customers can enter at checkout. Discounts are applied to menu items, not delivery fees.</p></div><span className="staff-count">{deals.filter((deal) => deal.active).length} active offers</span></div>
+    <form className="staff-create-user" onSubmit={addDeal}>
+      <label className="field-label">Offer title<input name="title" required minLength="2" maxLength="120" placeholder="Lunch special" /></label>
+      <label className="field-label">Offer code<input name="code" required minLength="3" maxLength="40" pattern="[A-Za-z0-9_-]+" placeholder="LUNCH5" /></label>
+      <label className="field-label">Discount in GH₵<input name="discount" required type="number" min="0.01" max="100000" step="0.01" /></label>
+      <label className="field-label">Starts (optional)<input name="startsAt" type="datetime-local" /></label>
+      <label className="field-label">Ends (optional)<input name="endsAt" type="datetime-local" /></label>
+      <label className="field-label staff-menu-wide">Description<textarea name="description" required minLength="3" maxLength="500" rows="2" placeholder="Tell guests what makes this offer special." /></label>
+      <button disabled={busy} className="staff-primary staff-menu-wide"><Gift size={15} /> Publish offer</button>
+    </form>
+    <div className="staff-panel staff-team-list"><div className="staff-panel-head"><div><h2>Offers</h2><p>Pause expired or unavailable codes without deleting them.</p></div></div>
+      {deals.map((deal) => <div className="staff-list-row" key={deal.id}><div className="staff-row-avatar"><Gift size={16} /></div><div className="staff-row-main"><strong>{deal.title} · {money(deal.discount)}</strong><small>{deal.code} · {deal.description}{deal.startsAt ? ` · from ${new Date(deal.startsAt).toLocaleString("en-GH")}` : ""}{deal.endsAt ? ` · until ${new Date(deal.endsAt).toLocaleString("en-GH")}` : ""}</small></div><StatusPill>{deal.active ? "available" : "cancelled"}</StatusPill><button disabled={busy} className="staff-secondary" onClick={() => onAction(() => request(`/api/manager/deals/${deal.id}`, null, { method: "PATCH", body: JSON.stringify({ active: !deal.active }) }), `${deal.title} ${deal.active ? "paused" : "activated"}.`)}>{deal.active ? "Pause" : "Activate"}</button></div>)}
+      {deals.length === 0 && <EmptyState>Publish a special offer to show a deal on the restaurant home page.</EmptyState>}
+    </div>
+  </section>;
+}
+
 function OrderRow({ order }) {
-  return <div className="staff-list-row"><div className="staff-row-avatar"><ChefHat size={16} /></div><div className="staff-row-main"><strong title={`Full order number: ${order.orderNumber}`}>{displayOrderNumber(order.orderNumber)}</strong><small>{order.items.map((item) => `${item.quantity}× ${item.name}`).join(", ")}</small></div><StatusPill>{order.status}</StatusPill></div>;
+  const fulfillment = order.orderType === "delivery"
+    ? `Delivery · ${order.deliveryArea || "area pending"}`
+    : order.orderType === "dine-in" && order.tableId ? `Dine in · table ${order.tableId}` : order.orderType;
+  return <div className="staff-list-row"><div className="staff-row-avatar"><ChefHat size={16} /></div><div className="staff-row-main"><strong title={`Full order number: ${order.orderNumber}`}>{displayOrderNumber(order.orderNumber)}</strong><small>{fulfillment} · {order.items.map((item) => `${item.quantity}× ${item.name}`).join(", ")}</small></div><StatusPill>{order.status}</StatusPill></div>;
 }
 
 function EmptyState({ children }) {
@@ -446,8 +526,35 @@ function Tables({ tables, busy, onAction, pin }) {
   return <section className="staff-content">
     <div className="staff-section-intro"><div><h2>Dining room</h2><p>Track table capacity and live service status.</p></div><span className="staff-count">{tables.length} tables</span></div>
     <form className="staff-inline-form" onSubmit={addTable}><input name="name" required minLength="2" maxLength="40" placeholder="New table name" /><input name="seats" required type="number" min="1" max="20" defaultValue="2" aria-label="Number of seats" /><button disabled={busy} className="staff-primary staff-small"><Plus size={15} /> Add table</button></form>
-    <div className="table-grid">{tables.map((table) => <article className={`table-card table-${table.status}`} key={table.id}><div className="table-card-top"><span className="table-icon"><Utensils size={17} /></span><StatusPill>{table.status}</StatusPill></div><h3>{table.name}</h3><p>{table.seats} seats</p><label className="staff-select-label">Set status<select value={table.status} disabled={busy} onChange={(event) => onAction(() => request(`/api/staff/tables/${table.id}`, pin, { method: "PATCH", body: JSON.stringify({ status: event.target.value }) }), `${table.name} updated.`)}>{tableStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label></article>)}</div>
+    <div className="table-grid">{tables.map((table) => <article className={`table-card table-${table.status}`} key={table.id}><div className="table-card-top"><span className="table-icon"><Utensils size={17} /></span><StatusPill>{table.status}</StatusPill></div><h3>{table.name}</h3><p>{table.seats} seats</p><label className="staff-select-label">Set status<select value={table.status} disabled={busy} onChange={(event) => onAction(() => request(`/api/staff/tables/${table.id}`, pin, { method: "PATCH", body: JSON.stringify({ status: event.target.value }) }), `${table.name} updated.`)}>{tableStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label><details className="table-qr"><summary><QrCode size={15} /> QR dine-in ordering</summary><QrTableLink table={table} /></details></article>)}</div>
   </section>;
+}
+
+function QrTableLink({ table }) {
+  const [qrCode, setQrCode] = useState("");
+  const [error, setError] = useState("");
+  const targetUrl = `${window.location.origin}/?table=${encodeURIComponent(table.id)}`;
+
+  useEffect(() => {
+    let active = true;
+    QRCode.toDataURL(targetUrl, { errorCorrectionLevel: "M", margin: 2, width: 240 })
+      .then((image) => {
+        if (active) setQrCode(image);
+      })
+      .catch((generationError) => {
+        if (active) setError(`QR code could not be generated: ${generationError.message}`);
+      });
+    return () => {
+      active = false;
+    };
+  }, [targetUrl]);
+
+  return <div className="table-qr-content">
+    {error && <p role="alert">{error}</p>}
+    {qrCode && <img src={qrCode} alt={`QR code for ordering at ${table.name}`} />}
+    <a href={targetUrl} target="_blank" rel="noreferrer">Preview {table.name} ordering link</a>
+    {qrCode && <a href={qrCode} download={`orderpulse-${table.id}-qr.png`}>Download QR code</a>}
+  </div>;
 }
 
 function Reservations({ reservations, tables, busy, onAction, pin }) {
@@ -562,7 +669,7 @@ function MenuManagement({ menuItems, busy, onAction, pin, manager }) {
 function Orders({ orders, busy, onAction, pin }) {
   return <section className="staff-content">
     <div className="staff-section-intro"><div><h2>All orders</h2><p>Paystack verifies payments automatically before the kitchen starts preparing an order.</p></div><span className="staff-count">{orders.length} total</span></div>
-    {orders.length === 0 ? <EmptyState>Guest orders will appear here.</EmptyState> : <div className="staff-card-list">{orders.map((order) => <article className="order-card" key={order.id}><div className="order-card-top"><div><h3 title={`Full order number: ${order.orderNumber}`}>{displayOrderNumber(order.orderNumber)}</h3><p>{order.customerName} · {order.phone} · {order.orderType}</p></div><strong>{money(order.total)}</strong></div><div className="order-card-items">{order.items.map((item, index) => <span key={`${order.id}-${index}`}>{item.quantity} × {item.name}</span>)}</div><div className="order-card-bottom">{order.paymentStatus !== "paid" ? <><span className="status-pill status-pending">Paystack payment pending</span><p className="order-payment-review">Preparation stays locked until Paystack confirms this transaction.</p></> : <><StatusPill>{orderStatusLabels[order.status] ? orderStatusLabels[order.status] : order.status}</StatusPill><StatusPill>{order.paymentStatus}</StatusPill><label className="staff-select-label">Update status<select value={order.status} disabled={busy} onChange={(event) => onAction(() => request(`/api/staff/orders/${order.id}`, null, { method: "PATCH", body: JSON.stringify({ status: event.target.value }) }), `${order.orderNumber} marked ${event.target.value}.`)}>{orderStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label></>}</div></article>)}</div>}
+    {orders.length === 0 ? <EmptyState>Guest orders will appear here.</EmptyState> : <div className="staff-card-list">{orders.map((order) => <article className="order-card" key={order.id}><div className="order-card-top"><div><h3 title={`Full order number: ${order.orderNumber}`}>{displayOrderNumber(order.orderNumber)}</h3><p>{order.customerName} · {order.phone} · {order.orderType}{order.deliveryArea ? ` · ${order.deliveryArea}` : ""}{order.tableId ? ` · table ${order.tableId}` : ""}</p></div><strong>{money(order.total)}</strong></div><div className="order-card-items">{order.items.map((item, index) => <span key={`${order.id}-${index}`}>{item.quantity} × {item.name}</span>)}</div>{order.deliveryAddress && <p className="order-payment-review">Delivery address: {order.deliveryAddress}</p>}{order.dealCode && <p className="order-payment-review">Offer: {order.dealCode} · −{money(order.dealDiscount)}</p>}{order.rewardsPointsUsed > 0 && <p className="order-payment-review">Rewards used: {order.rewardsPointsUsed} points</p>}<div className="order-card-bottom">{order.paymentStatus !== "paid" ? <><span className="status-pill status-pending">Paystack payment pending</span><p className="order-payment-review">Preparation stays locked until Paystack confirms this transaction.</p></> : <><StatusPill>{orderStatusLabels[order.status] ? orderStatusLabels[order.status] : order.status}</StatusPill><StatusPill>{order.paymentStatus}</StatusPill><label className="staff-select-label">Update status<select value={order.status} disabled={busy} onChange={(event) => onAction(() => request(`/api/staff/orders/${order.id}`, null, { method: "PATCH", body: JSON.stringify({ status: event.target.value }) }), `${order.orderNumber} marked ${event.target.value}.`)}>{orderStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label></>}</div></article>)}</div>}
   </section>;
 }
 

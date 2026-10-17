@@ -107,18 +107,26 @@ export function downloadReceiptPdf(order) {
 
   const cardTop = y;
   const cardWidth = (pageWidth - 96) / 2;
-  drawRect(42, cardTop, cardWidth, 94, colors.white, colors.line);
-  drawRect(54 + cardWidth, cardTop, cardWidth, 94, colors.white, colors.line);
+  const fulfillment = order.orderType === "delivery"
+    ? `Delivery${order.deliveryArea ? ` · ${order.deliveryArea}` : ""}`
+    : order.orderType === "dine-in"
+      ? `Dine in${order.tableName ? ` · ${order.tableName}` : ""}`
+      : "Pickup";
+  const addressLines = order.deliveryAddress ? wrap(`Delivery address: ${order.deliveryAddress}`, 38) : [];
+  const cardHeight = Math.max(94, 83 + addressLines.length * 11);
+  drawRect(42, cardTop, cardWidth, cardHeight, colors.white, colors.line);
+  drawRect(54 + cardWidth, cardTop, cardWidth, cardHeight, colors.white, colors.line);
   drawText("BILLED TO", 54, cardTop + 12, 8, true, colors.muted);
   drawText(order.customerName, 54, cardTop + 29, 10, true);
   drawText(order.phone, 54, cardTop + 46, 9);
-  drawText(order.orderType === "dine-in" ? "Dine in" : "Pickup", 54, cardTop + 63, 8, false, colors.muted);
+  drawText(fulfillment, 54, cardTop + 63, 8, false, colors.muted);
+  addressLines.forEach((line, index) => drawText(line, 54, cardTop + 78 + index * 11, 7, false, colors.muted));
   const fromX = 66 + cardWidth;
   drawText("FROM", fromX, cardTop + 12, 8, true, colors.muted);
   drawText("OrderPulse", fromX, cardTop + 29, 10, true);
   drawText("Ahodwo, Kumasi, Ghana", fromX, cardTop + 46, 8);
   drawText("Ghana", fromX, cardTop + 63, 8);
-  y = cardTop + 117;
+  y = cardTop + cardHeight + 23;
 
   drawItemsHeading();
   for (const item of order.items) {
@@ -138,14 +146,22 @@ export function downloadReceiptPdf(order) {
   }
 
   const subtotal = order.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
-  if (y + 106 > 765) {
+  const totals = [
+    ["Subtotal", subtotal],
+    ...(order.deliveryFee > 0 ? [[`Delivery · ${order.deliveryArea || "area"}`, order.deliveryFee]] : []),
+    ...(order.dealDiscount > 0 ? [[`Offer · ${order.dealCode || ""}`, -order.dealDiscount]] : []),
+    ...(order.rewardsDiscount > 0 ? [[`Rewards · ${order.rewardsPointsUsed} points`, -order.rewardsDiscount]] : []),
+  ];
+  if (y + totals.length * 19 + 74 > 765) {
     pages.push([]);
     drawHeader(true);
   }
   y += 8;
-  drawText("Subtotal", pageWidth - 220, y, 9, false, colors.muted);
-  drawText(money(subtotal), pageWidth - 42, y, 9, false, colors.ink, "right");
-  y += 24;
+  for (const [label, amount] of totals) {
+    drawText(label, pageWidth - 220, y, 9, false, colors.muted);
+    drawText(`${amount < 0 ? "-" : ""}${money(Math.abs(amount))}`, pageWidth - 42, y, 9, false, colors.ink, "right");
+    y += 18;
+  }
   drawRect(pageWidth - 220, y - 5, 178, 31, colors.forest);
   drawText(paid ? "Total paid" : "Order total", pageWidth - 210, y + 3, 9, true, colors.white);
   drawText(money(order.total), pageWidth - 52, y + 3, 9, true, colors.white, "right");

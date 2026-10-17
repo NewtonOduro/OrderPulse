@@ -94,13 +94,41 @@ const schema = `
     customer_name TEXT NOT NULL,
     customer_email TEXT NOT NULL DEFAULT '',
     phone TEXT NOT NULL,
-    order_type TEXT NOT NULL CHECK (order_type IN ('pickup', 'dine-in')),
+    order_type TEXT NOT NULL CHECK (order_type IN ('pickup', 'dine-in', 'delivery')),
     total_pesewas BIGINT NOT NULL,
     status TEXT NOT NULL DEFAULT 'received',
     payment_status TEXT NOT NULL DEFAULT 'paid',
     payment_reference TEXT UNIQUE,
+    customer_user_id INTEGER,
+    table_id INTEGER,
+    delivery_address TEXT,
+    delivery_area TEXT,
+    delivery_fee_pesewas INTEGER NOT NULL DEFAULT 0,
+    deal_code TEXT,
+    deal_discount_pesewas INTEGER NOT NULL DEFAULT 0,
+    rewards_points_used INTEGER NOT NULL DEFAULT 0,
+    rewards_discount_pesewas INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS delivery_areas (
+    id SERIAL PRIMARY KEY,
+    area_name TEXT NOT NULL UNIQUE,
+    fee_pesewas INTEGER NOT NULL DEFAULT 0 CHECK (fee_pesewas >= 0),
+    enabled BOOLEAN NOT NULL DEFAULT TRUE
+  );
+
+  CREATE TABLE IF NOT EXISTS restaurant_deals (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    code TEXT NOT NULL UNIQUE,
+    discount_pesewas INTEGER NOT NULL CHECK (discount_pesewas > 0),
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    starts_at TIMESTAMPTZ,
+    ends_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
   CREATE TABLE IF NOT EXISTS order_items (
@@ -130,6 +158,14 @@ const schema = `
     active BOOLEAN NOT NULL DEFAULT TRUE,
     email_verified BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS customer_favorites (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    menu_item_id INTEGER NOT NULL REFERENCES menu_items(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, menu_item_id)
   );
 
   CREATE TABLE IF NOT EXISTS email_auth_tokens (
@@ -219,4 +255,15 @@ export const db = createDatabaseAdapter(pool);
 await pool.query(schema);
 await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT TRUE");
 await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'paid'");
+await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_user_id INTEGER");
+await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS table_id INTEGER");
+await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_address TEXT");
+await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_area TEXT");
+await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee_pesewas INTEGER NOT NULL DEFAULT 0");
+await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS deal_code TEXT");
+await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS deal_discount_pesewas INTEGER NOT NULL DEFAULT 0");
+await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS rewards_points_used INTEGER NOT NULL DEFAULT 0");
+await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS rewards_discount_pesewas INTEGER NOT NULL DEFAULT 0");
+await pool.query("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_order_type_check");
+await pool.query("ALTER TABLE orders ADD CONSTRAINT orders_order_type_check CHECK (order_type IN ('pickup', 'dine-in', 'delivery'))");
 if (process.env.PG_SKIP_SEED !== "1") await seedDatabase(db);

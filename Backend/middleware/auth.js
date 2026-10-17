@@ -73,6 +73,18 @@ export async function requireUser(request, response, next) {
   return next();
 }
 
+export async function optionalUser(request, _response, next) {
+  const token = readSessionToken(request);
+  if (!token) return next();
+  const user = await db.get(`
+    SELECT u.id, u.name, u.email, u.phone, u.role, u.active
+    FROM sessions s JOIN users u ON u.id = s.user_id
+    WHERE s.token_hash = ? AND s.expires_at > ?
+  `, [hashToken(token), new Date().toISOString()]);
+  if (user?.active) request.user = safeUser(user);
+  return next();
+}
+
 export function requireCustomer(request, response, next) {
   if (request.user.role !== "customer") return response.status(403).json({ error: "Sign in with a customer account to reserve a table." });
   return next();

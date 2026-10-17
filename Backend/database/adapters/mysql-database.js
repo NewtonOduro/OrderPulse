@@ -76,8 +76,36 @@ const schema = `
     status VARCHAR(32) NOT NULL DEFAULT 'received',
     payment_status VARCHAR(24) NOT NULL DEFAULT 'paid',
     payment_reference VARCHAR(120) UNIQUE,
+    customer_user_id INT UNSIGNED,
+    table_id INT UNSIGNED,
+    delivery_address VARCHAR(500),
+    delivery_area VARCHAR(120),
+    delivery_fee_pesewas INT NOT NULL DEFAULT 0,
+    deal_code VARCHAR(40),
+    deal_discount_pesewas INT NOT NULL DEFAULT 0,
+    rewards_points_used INT NOT NULL DEFAULT 0,
+    rewards_discount_pesewas INT NOT NULL DEFAULT 0,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+  CREATE TABLE IF NOT EXISTS delivery_areas (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    area_name VARCHAR(120) NOT NULL UNIQUE,
+    fee_pesewas INT NOT NULL DEFAULT 0 CHECK (fee_pesewas >= 0),
+    enabled BOOLEAN NOT NULL DEFAULT TRUE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+  CREATE TABLE IF NOT EXISTS restaurant_deals (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(120) NOT NULL,
+    description VARCHAR(500) NOT NULL,
+    code VARCHAR(40) NOT NULL UNIQUE,
+    discount_pesewas INT NOT NULL CHECK (discount_pesewas > 0),
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    starts_at DATETIME(3),
+    ends_at DATETIME(3),
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
   CREATE TABLE IF NOT EXISTS order_items (
@@ -111,6 +139,16 @@ const schema = `
     active BOOLEAN NOT NULL DEFAULT TRUE,
     email_verified BOOLEAN NOT NULL DEFAULT TRUE,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+  CREATE TABLE IF NOT EXISTS customer_favorites (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id INT UNSIGNED NOT NULL,
+    menu_item_id INT UNSIGNED NOT NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    UNIQUE KEY uq_customer_favorite (user_id, menu_item_id),
+    CONSTRAINT fk_customer_favorite_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_customer_favorite_menu FOREIGN KEY (menu_item_id) REFERENCES menu_items(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
   CREATE TABLE IF NOT EXISTS email_auth_tokens (
@@ -245,6 +283,15 @@ for (const statement of schema.split(";").map((value) => value.trim()).filter(Bo
 await ensureColumn(pool, "users", "email_verified", "BOOLEAN NOT NULL DEFAULT TRUE");
 await ensureColumn(pool, "orders", "payment_status", "VARCHAR(24) NOT NULL DEFAULT 'paid'");
 await ensureColumn(pool, "orders", "payment_reference", "VARCHAR(120) NULL UNIQUE");
+await ensureColumn(pool, "orders", "customer_user_id", "INT UNSIGNED NULL");
+await ensureColumn(pool, "orders", "table_id", "INT UNSIGNED NULL");
+await ensureColumn(pool, "orders", "delivery_address", "VARCHAR(500) NULL");
+await ensureColumn(pool, "orders", "delivery_area", "VARCHAR(120) NULL");
+await ensureColumn(pool, "orders", "delivery_fee_pesewas", "INT NOT NULL DEFAULT 0");
+await ensureColumn(pool, "orders", "deal_code", "VARCHAR(40) NULL");
+await ensureColumn(pool, "orders", "deal_discount_pesewas", "INT NOT NULL DEFAULT 0");
+await ensureColumn(pool, "orders", "rewards_points_used", "INT NOT NULL DEFAULT 0");
+await ensureColumn(pool, "orders", "rewards_discount_pesewas", "INT NOT NULL DEFAULT 0");
 
 export const db = createDatabaseAdapter(pool);
 if (process.env.DB_SKIP_SEED !== "1") await seedDatabase(db);

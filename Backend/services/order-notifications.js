@@ -370,9 +370,9 @@ export async function sendVerificationEmail({ email, name, token }) {
       "Verify your email address to activate your OrderPulse account:",
       link,
       "",
-      "This link expires in 30 seconds. If you did not create this account, you can ignore this email.",
+      "This link expires in 24 hours. If you did not create this account, you can ignore this email.",
     ].join("\n"),
-    html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(name)},</p><p>Verify your email address to activate your account.</p><p><a href="${escapeHtml(link)}" style="display:inline-block;background:#193d2d;color:white;padding:12px 20px;border-radius:24px;text-decoration:none">Verify email</a></p><p>This link expires in 30 seconds. If you did not create this account, you can ignore this email.</p></div>`,
+    html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(name)},</p><p>Verify your email address to activate your account.</p><p><a href="${escapeHtml(link)}" style="display:inline-block;background:#193d2d;color:white;padding:12px 20px;border-radius:24px;text-decoration:none">Verify email</a></p><p>This link expires in 24 hours. If you did not create this account, you can ignore this email.</p></div>`,
     reference: "email verification",
   });
 }
@@ -417,14 +417,31 @@ export async function sendPaymentConfirmationEmail({ email, customerName, orderN
 }
 
 export async function sendOrderNotifications(order) {
+  const subtotal = order.subtotal ?? order.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  const fulfillment = order.orderType === "delivery"
+    ? `Delivery · ${order.deliveryArea || "area"}`
+    : order.orderType === "dine-in"
+      ? `Dine in${order.tableName ? ` · ${order.tableName}` : ""}`
+      : "Pickup";
+  const breakdown = [
+    [`Subtotal`, subtotal],
+    ...(order.deliveryFee > 0 ? [[`Delivery · ${order.deliveryArea}`, order.deliveryFee]] : []),
+    ...(order.dealDiscount > 0 ? [[`Offer · ${order.dealCode}`, -order.dealDiscount]] : []),
+    ...(order.rewardsDiscount > 0 ? [[`Rewards · ${order.rewardsPointsUsed} points`, -order.rewardsDiscount]] : []),
+    ["Total", order.total],
+  ];
+  const htmlBreakdown = breakdown.map(([label, amount]) =>
+    `<p><strong>${escapeHtml(label)}:</strong> ${amount < 0 ? "−" : ""}${formatMoney(Math.abs(amount))}</p>`,
+  ).join("");
   const lines = [
     `Hello ${order.customerName},`,
     "",
-    `We received order ${order.orderNumber} (${order.orderType === "dine-in" ? "Dine in" : "Pickup"}).`,
+    `We received order ${order.orderNumber} (${fulfillment}).`,
+    ...(order.deliveryAddress ? [`Delivery address: ${order.deliveryAddress}`] : []),
     "",
     ...order.items.map((item) => `${item.quantity} × ${item.name} — ${formatMoney(item.unitPrice * item.quantity)}`),
     "",
-    `Total: ${formatMoney(order.total)}`,
+    ...breakdown.map(([label, amount]) => `${label}: ${amount < 0 ? "−" : ""}${formatMoney(Math.abs(amount))}`),
     `Status: ${order.status}`,
     "",
     "Complete payment securely through Paystack:",
@@ -440,26 +457,27 @@ export async function sendOrderNotifications(order) {
       to: order.customerEmail,
       subject: `OrderPulse order ${order.orderNumber}`,
       text: lines.join("\n"),
-      html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse · Ahodwo, Kumasi</h1><p>Hello ${escapeHtml(order.customerName)},</p><p>We received order <strong>${escapeHtml(order.orderNumber)}</strong> (${order.orderType === "dine-in" ? "Dine in" : "Pickup"}).</p><ul>${htmlItems}</ul><p><strong>Total: ${formatMoney(order.total)}</strong></p><p>Status: ${escapeHtml(order.status)}</p><h2>Complete your payment</h2><p><a href="${escapeHtml(order.paymentUrl || "#")}">Continue to secure Paystack checkout</a></p><p>Your order will be released to the kitchen once payment is verified.</p><p>Thank you for choosing OrderPulse.</p></div>`,
+      html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse · Ahodwo, Kumasi</h1><p>Hello ${escapeHtml(order.customerName)},</p><p>We received order <strong>${escapeHtml(order.orderNumber)}</strong> (${escapeHtml(fulfillment)}).</p>${order.deliveryAddress ? `<p>Delivery address: ${escapeHtml(order.deliveryAddress)}</p>` : ""}<ul>${htmlItems}</ul>${htmlBreakdown}<p>Status: ${escapeHtml(order.status)}</p><h2>Complete your payment</h2><p><a href="${escapeHtml(order.paymentUrl || "#")}">Continue to secure Paystack checkout</a></p><p>Your order will be released to the kitchen once payment is verified.</p><p>Thank you for choosing OrderPulse.</p></div>`,
       reference: `order ${order.orderNumber}`,
     }),
     sendStaffEmail({
       subject: `New OrderPulse order ${order.orderNumber}`,
       text: [
-        `New ${order.orderType === "dine-in" ? "dine-in" : "pickup"} order ${order.orderNumber}`,
+        `New ${fulfillment} order ${order.orderNumber}`,
         "",
         `Customer: ${order.customerName}`,
         `Email: ${order.customerEmail}`,
         `Phone: ${order.phone}`,
+        ...(order.deliveryAddress ? [`Delivery address: ${order.deliveryAddress}`] : []),
         "",
         ...order.items.map((item) => `${item.quantity} × ${item.name} — ${formatMoney(item.unitPrice * item.quantity)}`),
         "",
-        `Total: ${formatMoney(order.total)}`,
+        ...breakdown.map(([label, amount]) => `${label}: ${amount < 0 ? "−" : ""}${formatMoney(Math.abs(amount))}`),
         "",
         "Payment: Paystack",
         `Payment status: ${order.paymentStatus || "pending"}`,
       ].join("\n"),
-      html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>New restaurant order</h1><p><strong>Order:</strong> ${escapeHtml(order.orderNumber)} (${order.orderType === "dine-in" ? "Dine in" : "Pickup"})</p><p><strong>Customer:</strong> ${escapeHtml(order.customerName)}<br><strong>Email:</strong> ${escapeHtml(order.customerEmail)}<br><strong>Phone:</strong> ${escapeHtml(order.phone)}</p><ul>${htmlItems}</ul><p><strong>Total: ${formatMoney(order.total)}</strong></p></div>`,
+      html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>New restaurant order</h1><p><strong>Order:</strong> ${escapeHtml(order.orderNumber)} (${escapeHtml(fulfillment)})</p><p><strong>Customer:</strong> ${escapeHtml(order.customerName)}<br><strong>Email:</strong> ${escapeHtml(order.customerEmail)}<br><strong>Phone:</strong> ${escapeHtml(order.phone)}${order.deliveryAddress ? `<br><strong>Delivery address:</strong> ${escapeHtml(order.deliveryAddress)}` : ""}</p><ul>${htmlItems}</ul>${htmlBreakdown}</div>`,
       reference: `staff notification for order ${order.orderNumber}`,
     }),
   ]);
