@@ -199,6 +199,7 @@ function App() {
   const [featuredSlideIndex, setFeaturedSlideIndex] = useState(0);
   const featuredSectionRef = useRef(null);
   const featuredTrackRef = useRef(null);
+  const featuredPointerStartX = useRef(null);
 
   useEffect(() => {
     const syncRoute = () => {
@@ -735,15 +736,9 @@ function App() {
         ? Math.min(Math.max(track.scrollLeft, 0), horizontalDistance)
         : Math.min(Math.max(window.scrollY - sectionTop, 0), horizontalDistance);
       const normalizedProgress = horizontalDistance ? progress / horizontalDistance : 0;
-      if (reducedMotion.matches) {
-        track.style.transform = "";
-      } else {
-        track.style.transform = `translate3d(${-progress}px, 0, 0)`;
-      }
+      track.style.transform = reducedMotion.matches ? "" : `translate3d(${-progress}px, 0, 0)`;
       updateSectionColors(normalizedProgress);
-      const plateRotation = reducedMotion.matches || !horizontalDistance
-        ? 0
-        : normalizedProgress * 720;
+      const plateRotation = reducedMotion.matches || !horizontalDistance ? 0 : normalizedProgress * 720;
       track.querySelectorAll(".featured-menu-plate").forEach((plate, index) => {
         plate.style.setProperty("--plate-rotation", `${plateRotation + index * 12}deg`);
       });
@@ -1307,37 +1302,41 @@ function App() {
               <h2>A little taste<br /><em>of what we love.</em></h2>
               <p>From Ghanaian favourites to global plates and refreshing drinks.</p>
             </div>
-            <div ref={featuredTrackRef} className="featured-scroll-track">
+            <div
+              ref={featuredTrackRef}
+              id="featured-menu-carousel"
+              className="featured-scroll-track"
+              role="group"
+              aria-label="Featured dishes"
+              onPointerDown={(event) => {
+                if (window.matchMedia("(min-width: 768px) and (pointer: fine)").matches) return;
+                if (event.target instanceof Element && event.target.closest("button")) return;
+                featuredPointerStartX.current = event.clientX;
+              }}
+              onPointerUp={(event) => {
+                if (featuredPointerStartX.current === null) return;
+                const distance = event.clientX - featuredPointerStartX.current;
+                featuredPointerStartX.current = null;
+                if (Math.abs(distance) < 40) return;
+                setFeaturedSlideIndex((current) =>
+                  (current + (distance < 0 ? 1 : -1) + featuredItems.length) % featuredItems.length,
+                );
+              }}
+              onPointerCancel={() => { featuredPointerStartX.current = null; }}
+            >
               {featuredItems.map((item, index) => <article
                 key={item.id}
                 className="featured-menu-panel"
                 data-featured-active={index === featuredSlideIndex % featuredItems.length}
+                aria-label={`${index + 1} of ${featuredItems.length}: ${item.name}`}
               >
                 <div className="featured-menu-plate" aria-hidden="true">
                   <div className="featured-plate-wood">
                     <img src={item.imageUrl} alt="" onError={handleMenuImageError} loading="lazy" />
                   </div>
                 </div>
-                <div className="featured-carousel-controls" role="group" aria-label="Choose featured dish">
-                  <button
-                    type="button"
-                    aria-label="Previous featured dish"
-                    onClick={() => setFeaturedSlideIndex((current) =>
-                      (current - 1 + featuredItems.length) % featuredItems.length,
-                    )}
-                  >
-                    <ChevronLeft size={22} />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Next featured dish"
-                    onClick={() => setFeaturedSlideIndex((current) => (current + 1) % featuredItems.length)}
-                  >
-                    <ChevronRight size={22} />
-                  </button>
-                </div>
                 <div className="featured-menu-copy">
-                  <span className="featured-menu-index">0{index + 1} / 0{featuredItems.length}</span>
+                  <span className="featured-menu-index">{String(index + 1).padStart(2, "0")} / {String(featuredItems.length).padStart(2, "0")}</span>
                   <span className="featured-menu-category">{item.category === "Main Courses or Entrées" ? "Foreign food" : item.category}{item.subcategory ? ` · ${item.subcategory}` : ""}</span>
                   <h3>{item.name}</h3>
                   <p>{item.description}</p>
@@ -1352,6 +1351,27 @@ function App() {
               </article>)}
             </div>
             <div className="featured-scroll-cue"><span>KEEP SCROLLING</span><ArrowRight size={15} /></div>
+            <div className="featured-carousel-controls" role="group" aria-label="Choose featured dish">
+              <button
+                type="button"
+                aria-label="Previous featured dish"
+                aria-controls="featured-menu-carousel"
+                onClick={() => setFeaturedSlideIndex((current) =>
+                  (current - 1 + featuredItems.length) % featuredItems.length,
+                )}
+              >
+                <ChevronLeft size={22} />
+              </button>
+              <span aria-live="polite">{String((featuredSlideIndex % featuredItems.length) + 1).padStart(2, "0")} / {String(featuredItems.length).padStart(2, "0")}</span>
+              <button
+                type="button"
+                aria-label="Next featured dish"
+                aria-controls="featured-menu-carousel"
+                onClick={() => setFeaturedSlideIndex((current) => (current + 1) % featuredItems.length)}
+              >
+                <ChevronRight size={22} />
+              </button>
+            </div>
           </div>
         </section>}
 

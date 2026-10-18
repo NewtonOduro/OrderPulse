@@ -3393,7 +3393,7 @@ a {
   }
 
   .featured-scroll-pin {
-    min-height: 540px;
+    min-height: 0;
     padding-top: 26px;
   }
 
@@ -3406,12 +3406,14 @@ a {
   }
 
   .featured-menu-panel {
-    width: clamp(270px, 78vw, 340px);
-    height: 100%;
+    width: min(720px, calc(100% - 32px));
+    height: auto;
     min-height: 0;
+    flex: 0 0 100%;
+    flex-direction: column;
     gap: 16px;
-    margin-right: 8px;
-    margin-left: 8px;
+    margin: 0 auto;
+    padding: 16px 0;
   }
 
   .featured-menu-plate {
@@ -3425,7 +3427,9 @@ a {
   }
 
   .featured-menu-copy {
+    align-items: center;
     padding: 0 10px;
+    text-align: center;
   }
 
   .featured-menu-category {
@@ -3444,6 +3448,7 @@ a {
   }
 
   .featured-menu-actions {
+    justify-content: center;
     gap: 10px;
     margin-top: 10px;
   }
@@ -3456,9 +3461,8 @@ a {
     margin-top: 9px;
   }
 
-  .featured-scroll-cue {
-    width: 86vw;
-    margin-top: 10px;
+  .featured-carousel-controls {
+    margin-top: 8px;
   }
 
   .checkout-overlay {
@@ -3481,42 +3485,6 @@ a {
 
   .checkout-body {
     padding: 19px 18px 24px;
-  }
-}
-
-@media (min-width: 768px) and (pointer: fine) and (prefers-reduced-motion: reduce) {
-  .featured-scroll-section {
-    height: auto !important;
-  }
-
-  .featured-scroll-pin {
-    position: relative;
-    height: auto;
-    min-height: 0;
-    overflow: visible;
-    padding: 32px 0;
-  }
-
-  .featured-scroll-track {
-    width: 100%;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scroll-snap-type: x mandatory;
-    transform: none !important;
-  }
-
-  .featured-scroll-track::-webkit-scrollbar {
-    height: 6px;
-  }
-
-  .featured-scroll-track::-webkit-scrollbar-thumb {
-    border-radius: 999px;
-    background: #f5d37f;
-  }
-
-  .featured-menu-panel {
-    height: min(65vh, 540px);
-    scroll-snap-align: center;
   }
 }
 
@@ -3560,6 +3528,7 @@ a {
     align-items: stretch;
     gap: 0;
     overflow: visible;
+    touch-action: pan-y;
     transform: none !important;
   }
 
@@ -3615,8 +3584,49 @@ a {
   }
 }
 
+@media (min-width: 768px) and (pointer: fine) and (prefers-reduced-motion: reduce) {
+  .featured-scroll-section {
+    height: auto !important;
+  }
+
+  .featured-scroll-pin {
+    position: relative;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    padding: 32px 0;
+  }
+
+  .featured-scroll-track {
+    width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    transform: none !important;
+  }
+
+  .featured-scroll-track::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  .featured-scroll-track::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: #f5d37f;
+  }
+
+  .featured-menu-panel {
+    height: min(65vh, 540px);
+    scroll-snap-align: center;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .featured-scroll-section {
+    transition: none;
+  }
+
+  .featured-scroll-track,
+  .featured-carousel-controls button {
     transition: none;
   }
 }
