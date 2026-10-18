@@ -160,6 +160,7 @@ function App() {
   const [customerEngagement, setCustomerEngagement] = useState(null);
   const [customerFavorites, setCustomerFavorites] = useState([]);
   const [customerOrders, setCustomerOrders] = useState([]);
+  const [pendingFavorite, setPendingFavorite] = useState(null);
   const [checkoutOrderType, setCheckoutOrderType] = useState(() =>
     new URLSearchParams(window.location.search).has("table") ? "dine-in" : "pickup",
   );
@@ -810,10 +811,15 @@ function App() {
 
   async function toggleFavorite(menuItem) {
     if (!customerUser) {
+      setPendingFavorite(menuItem);
       setAuthMode("login");
       setAuthOpen(true);
       return;
     }
+    await saveFavorite(menuItem);
+  }
+
+  async function saveFavorite(menuItem) {
     const isFavorite = customerFavorites.some((item) => item.id === menuItem.id);
     try {
       const response = await fetch(`/api/customer/favorites/${menuItem.id}`, {
@@ -826,7 +832,9 @@ function App() {
       }
       setCustomerFavorites((current) => isFavorite
         ? current.filter((item) => item.id !== menuItem.id)
-        : [{ ...menuItem, favoritedAt: new Date().toISOString() }, ...current]);
+        : current.some((item) => item.id === menuItem.id)
+          ? current
+          : [{ ...menuItem, favoritedAt: new Date().toISOString() }, ...current]);
     } catch (error) {
       setBookingMessage(error.message);
     }
@@ -860,6 +868,11 @@ function App() {
     setCustomerUser(user);
     setAuthOpen(false);
     setCustomerReservations([]);
+    if (pendingFavorite) {
+      const menuItem = pendingFavorite;
+      setPendingFavorite(null);
+      saveFavorite(menuItem);
+    }
     fetch("/api/customer/reservations", { credentials: "same-origin" })
       .then(async (response) => {
         const result = await response.json();
@@ -893,6 +906,7 @@ function App() {
   function closeAuthDialog() {
     clearAuthTokenFromUrl();
     setAuthOpen(false);
+    setPendingFavorite(null);
   }
 
   async function submitBooking(event) {
@@ -1688,6 +1702,7 @@ function App() {
 
       {authOpen && <AuthDialog
         mode={authMode}
+        prompt={pendingFavorite ? `Sign in or create an account to save ${pendingFavorite.name} to your favorites. It will be saved when you sign in.` : ""}
         token={new URLSearchParams(window.location.search).get(authMode === "verify" ? "verifyEmail" : "resetPassword") || ""}
         onClose={closeAuthDialog}
         onSuccess={acceptCustomerSignIn}

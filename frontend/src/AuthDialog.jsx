@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { AtSign, Eye, EyeOff, LockKeyhole, Phone, UserRound, X } from "lucide-react";
 
-function AuthDialog({ mode, token, onClose, onSuccess, onModeChange, onClearAuthToken }) {
+function AuthDialog({ mode, prompt, token, onClose, onSuccess, onModeChange, onClearAuthToken }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
@@ -113,7 +113,7 @@ function AuthDialog({ mode, token, onClose, onSuccess, onModeChange, onClearAuth
   const description = verificationComplete
     ? "Your account is active. Return to OrderPulse to continue."
     : registering
-      ? "Create an account to request and keep track of your table reservations."
+      ? "Create an account to save favourite dishes, collect rewards, and manage reservations."
       : verifying
         ? "Confirm your email address to activate your OrderPulse account."
         : resetting
@@ -122,7 +122,7 @@ function AuthDialog({ mode, token, onClose, onSuccess, onModeChange, onClearAuth
             ? "Enter your account email and we'll send a password reset link if it matches an active account."
             : mode === "resend"
               ? "Enter your account email to request a fresh verification link."
-              : "Sign in to request a reservation and manage your upcoming visits.";
+                : "Sign in to access your saved dishes, rewards, and reservations.";
 
   return (
     <div className="auth-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -132,6 +132,7 @@ function AuthDialog({ mode, token, onClose, onSuccess, onModeChange, onClearAuth
         <span className="auth-eyebrow">ORDERPULSE · ACCOUNT</span>
         <h2 id="auth-heading">{title}</h2>
         <p className="auth-description">{description}</p>
+        {prompt && <p role="status" className="auth-success">{prompt}</p>}
         {verificationComplete ? <div className="auth-form">
           <p role="status" className="auth-success">{status}</p>
           <a className="auth-submit auth-return-link" href="/">Go back to the app</a>
