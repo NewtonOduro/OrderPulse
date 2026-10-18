@@ -156,7 +156,7 @@ function App() {
     return params.has("verifyEmail") ? "verify" : params.has("resetPassword") ? "reset" : "login";
   });
   const [customerReservations, setCustomerReservations] = useState([]);
-  const [restaurantOptions, setRestaurantOptions] = useState({ deliveryAreas: [], deals: [], tables: [] });
+  const [restaurantOptions, setRestaurantOptions] = useState({ deliveryAreas: [], deals: [], bundles: [], tables: [] });
   const [customerEngagement, setCustomerEngagement] = useState(null);
   const [customerFavorites, setCustomerFavorites] = useState([]);
   const [customerOrders, setCustomerOrders] = useState([]);
@@ -571,6 +571,13 @@ function App() {
       <div className="menu-filter-list mb-8 flex gap-2 overflow-x-auto pb-2" aria-label="Filter menu by category">
         {categories.map((item) => <button key={item} type="button" aria-pressed={category === item} onClick={() => setCategory(item)} className={`menu-filter-button whitespace-nowrap rounded-full font-semibold ${category === item ? "is-active" : ""}`}>{item === "Foreign food" ? "Foreign foods" : item}</button>)}
       </div>
+      {restaurantOptions.bundles.length > 0 && <section className="mb-10" aria-labelledby="menu-bundles-heading">
+        <h2 id="menu-bundles-heading" className="mb-4 font-display text-2xl font-semibold">Meal bundles<span>.</span></h2>
+        <div className="grid gap-4 md:grid-cols-2">{restaurantOptions.bundles.map((bundle) => <article key={`menu-bundle-${bundle.id}`} className="flex items-center justify-between gap-4 rounded-3xl bg-[#e9eee4] p-5">
+          <div><h3 className="font-display text-lg font-semibold">{bundle.title} · {money(bundle.price)}</h3><p className="mt-1 text-sm text-forest/60">{bundle.description}</p><p className="mt-2 text-xs text-forest/55">{bundle.items.map((item) => `${item.quantity} × ${item.name}`).join(" · ")}</p></div>
+          <button type="button" className="shrink-0 rounded-full bg-forest px-4 py-2.5 text-sm font-semibold text-white" onClick={() => addMealBundle(bundle)}>Add to bag</button>
+        </article>)}</div>
+      </section>}
       {menuError ? <p role="alert" className="rounded-2xl bg-sky-50 p-5 text-sm text-sky-950">{menuError}</p> : menuLoading ? <div className="menu-loading-grid" aria-label="Loading menu" aria-busy="true">{Array.from({ length: 6 }, (_, index) => <div className="menu-skeleton-card" key={index}><span /><div><i /><i /><i /></div></div>)}</div> : visibleCount === 0 ? <p className="menu-empty-state"><span aria-hidden="true">✳</span><strong>No dishes in this category yet</strong><span>Try another category, or check back soon for something fresh.</span></p> : (
         <div className="space-y-12">
           {menuSections.filter((section) => section.groups.length > 0).map((section) => <section key={section.category} aria-label={section.title}>
@@ -804,9 +811,35 @@ function App() {
       const existing = current.find((item) => item.id === menuItem.id);
       if (!existing && amount > 0) return [...current, { ...menuItem, quantity: 1 }];
       return current
-        .map((item) => item.id === menuItem.id ? { ...item, quantity: item.quantity + amount } : item)
+        .map((item) => item.id === menuItem.id
+          ? { ...item, quantity: Math.min(20, Math.max(0, item.quantity + amount)) }
+          : item)
         .filter((item) => item.quantity > 0);
     });
+  }
+
+  function addMealBundle(bundle) {
+    const id = `bundle-${bundle.id}`;
+    setCart((current) => {
+      const existing = current.find((item) => item.id === id);
+      if (existing) {
+        return current.map((item) => item.id === id
+          ? { ...item, quantity: Math.min(20, item.quantity + 1) }
+          : item);
+      }
+      return [...current, {
+        id,
+        bundleId: bundle.id,
+        isMealBundle: true,
+        name: bundle.title,
+        description: bundle.description,
+        contents: bundle.items.map((item) => `${item.quantity} × ${item.name}`).join(", "),
+        price: bundle.price,
+        quantity: 1,
+        imageUrl: "/images/orderpulse-takeaway-box.png",
+      }];
+    });
+    setCartNotice(`${bundle.title} added to your bag`);
   }
 
   async function toggleFavorite(menuItem) {
@@ -841,13 +874,18 @@ function App() {
   }
 
   function reorder(items) {
+    const previousBundles = items
+      .filter((ordered) => ordered.bundleId)
+      .map((ordered) => restaurantOptions.bundles.find((bundle) => bundle.id === ordered.bundleId))
+      .filter(Boolean);
     const available = items
+      .filter((ordered) => ordered.menuItemId)
       .map((ordered) => ({
         item: menuItems.find((menuItem) => menuItem.id === ordered.menuItemId && menuItem.available !== false),
         quantity: ordered.quantity,
       }))
       .filter(({ item }) => item);
-    if (available.length === 0) {
+    if (available.length === 0 && previousBundles.length === 0) {
       setBookingMessage("None of the dishes from that order are currently available.");
       return;
     }
@@ -860,6 +898,11 @@ function App() {
       }
       return next;
     });
+    for (const bundle of previousBundles) {
+      for (let quantity = 0; quantity < items.find((ordered) => ordered.bundleId === bundle.id).quantity; quantity += 1) {
+        addMealBundle(bundle);
+      }
+    }
     setCartNotice("Your previous dishes are back in your bag");
     setCartOpen(true);
   }
@@ -969,9 +1012,13 @@ function App() {
           deliveryAddress: form.get("deliveryAddress"),
           deliveryAreaId: form.get("deliveryAreaId") ? Number(form.get("deliveryAreaId")) : null,
           dealCode: form.get("dealCode"),
+          bundles: cart.filter((item) => item.isMealBundle).map((item) => ({
+            id: item.bundleId,
+            quantity: item.quantity,
+          })),
           useRewards,
           tableId: qrTableId,
-          items: cart.map(({ id, quantity }) => ({ id, quantity })),
+          items: cart.filter((item) => !item.isMealBundle).map(({ id, quantity }) => ({ id, quantity })),
         }),
       });
       const result = await response.json();
@@ -1315,8 +1362,12 @@ function App() {
 
         {optionsError && <p role="alert" className="mx-auto max-w-7xl px-5 py-3 text-sm text-sky-950 md:px-10">{optionsError}</p>}
 
-        {restaurantOptions.deals.length > 0 && <section className="mx-auto max-w-7xl px-5 py-10 md:px-10" aria-labelledby="specials-heading">
-          <div className="mb-5 flex flex-wrap items-end justify-between gap-3"><div><span className="text-xs font-bold uppercase tracking-[.2em] text-leaf">Fresh offers</span><h2 id="specials-heading" className="mt-2 font-display text-3xl font-semibold">Today's specials<span>.</span></h2></div><span className="text-xs text-forest/55">Enter an offer code at checkout.</span></div>
+        {(restaurantOptions.deals.length > 0 || restaurantOptions.bundles.length > 0) && <section className="mx-auto max-w-7xl px-5 py-10 md:px-10" aria-labelledby="specials-heading">
+          <div className="mb-5 flex flex-wrap items-end justify-between gap-3"><div><span className="text-xs font-bold uppercase tracking-[.2em] text-leaf">Fresh offers</span><h2 id="specials-heading" className="mt-2 font-display text-3xl font-semibold">Today's specials<span>.</span></h2></div><span className="text-xs text-forest/55">Add bundles to your bag or enter a code at checkout.</span></div>
+          {restaurantOptions.bundles.length > 0 && <div className="mb-5 grid gap-4 md:grid-cols-2">{restaurantOptions.bundles.map((bundle) => <article className="flex items-center justify-between gap-4 rounded-3xl bg-[#e9eee4] p-5 sm:p-6" key={`bundle-${bundle.id}`}>
+            <div><span className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[.16em] text-leaf"><Gift size={15} /> Meal bundle</span><h3 className="mt-2 font-display text-xl font-semibold">{bundle.title}</h3><p className="mt-1 max-w-lg text-sm leading-6 text-forest/65">{bundle.description}</p><p className="mt-2 text-xs text-forest/60">{bundle.items.map((item) => `${item.quantity} × ${item.name}`).join(" · ")}</p><strong className="mt-2 inline-block">{money(bundle.price)}</strong></div>
+            <button type="button" className="shrink-0 rounded-full bg-forest px-4 py-2.5 text-sm font-semibold text-white hover:bg-leaf" onClick={() => addMealBundle(bundle)}>Add bundle</button>
+          </article>)}</div>}
           <div className="grid gap-4 md:grid-cols-2">{restaurantOptions.deals.map((deal) => <article className="flex flex-wrap items-center justify-between gap-4 rounded-3xl bg-[#e9eee4] p-5 sm:p-6" key={deal.id}>
             <div><span className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-[.16em] text-leaf"><Gift size={15} /> Meal deal</span><h3 className="mt-2 font-display text-xl font-semibold">{deal.title}</h3><p className="mt-1 max-w-lg text-sm leading-6 text-forest/65">{deal.description}</p><span className="mt-3 inline-block rounded-full bg-white px-3 py-1.5 font-mono text-xs font-bold tracking-wider">{deal.code}</span></div>
             <button type="button" className="rounded-full bg-forest px-4 py-2.5 text-sm font-semibold text-white hover:bg-leaf" onClick={() => {
@@ -1347,7 +1398,7 @@ function App() {
                 {customerFavorites.length ? <div className="mt-4 grid gap-3 sm:grid-cols-2">{customerFavorites.slice(0, 4).map((item) => <div key={item.id} className="flex items-center gap-3 rounded-2xl bg-cream p-3"><img src={item.imageUrl} alt="" onError={handleMenuImageError} className="h-14 w-14 rounded-xl object-cover" /><div className="min-w-0 flex-1"><strong className="block truncate text-sm">{item.name}</strong><span className="text-xs text-forest/55">{money(item.price)}</span></div><button type="button" disabled={item.available === false} onClick={() => updateQuantity(item, 1)} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-lime/60" aria-label={`Add ${item.name} to bag`}><Plus size={16} /></button></div>)}</div> : <p className="mt-3 text-sm text-forest/55">Tap the heart on any dish to save it here.</p>}
               </section>
               <section className="rounded-3xl bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><h3 className="font-display text-xl font-semibold">Order again</h3><RotateCcw size={18} className="text-leaf" /></div>
-                {customerOrders.length ? <div className="mt-3 divide-y divide-forest/10">{customerOrders.slice(0, 3).map((order) => <div key={order.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div><strong className="text-sm">{displayOrderNumber(order.orderNumber)}</strong><p className="mt-1 text-xs text-forest/55">{order.items.map((item) => `${item.quantity}× ${item.name}`).join(", ")} · {money(order.total)}</p></div><button type="button" className="rounded-full border border-forest/15 px-3 py-2 text-xs font-semibold hover:border-leaf" onClick={() => reorder(order.items)}>Reorder</button></div>)}</div> : <p className="mt-3 text-sm text-forest/55">Your past orders will show up here.</p>}
+                {customerOrders.length ? <div className="mt-3 divide-y divide-forest/10">{customerOrders.slice(0, 3).map((order) => <div key={order.id} className="flex flex-wrap items-center justify-between gap-3 py-3"><div><strong className="text-sm">{displayOrderNumber(order.orderNumber)}</strong><p className="mt-1 text-xs text-forest/55">{order.items.map((item) => `${item.quantity}× ${item.name}${item.contents ? ` (${item.contents})` : ""}`).join(", ")} · {money(order.total)}</p></div><button type="button" className="rounded-full border border-forest/15 px-3 py-2 text-xs font-semibold hover:border-leaf" onClick={() => reorder(order.items)}>Reorder</button></div>)}</div> : <p className="mt-3 text-sm text-forest/55">Your past orders will show up here.</p>}
               </section>
             </div>
           </div> : <p className="mt-3 max-w-2xl text-sm leading-6 text-forest/60">Create an account to keep your favourite dishes, quickly reorder, and collect points on completed orders.</p>}
@@ -1589,7 +1640,7 @@ function App() {
         <aside className="ml-auto flex h-full w-full max-w-md flex-col bg-cream p-5 shadow-2xl sm:p-7">
           <div className="flex items-center justify-between border-b border-forest/10 pb-5"><div><p className="text-[10px] font-bold uppercase tracking-[.2em] text-leaf">Made fresh for you</p><h2 className="mt-1 font-display text-2xl font-semibold">Your bag <span className="text-forest/35">({cartCount})</span></h2></div><button onClick={() => setCartOpen(false)} className="rounded-full p-2 hover:bg-forest/5" aria-label="Close bag"><X size={20} /></button></div>
           {cart.length === 0 ? <div className="grid flex-1 place-items-center text-center"><div><span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-lime/40 text-leaf"><ShoppingBag size={23} /></span><p className="mt-4 font-display text-xl font-semibold">It's a little empty in here</p><p className="mt-2 text-sm text-forest/50">Add something delicious from our menu.</p><a href="/menu" onClick={(event) => { setCartOpen(false); navigate(event, "/menu"); }} className="mt-5 inline-block text-sm font-semibold text-leaf underline underline-offset-4">Explore the menu</a></div></div> : <>
-            <div className="flex-1 space-y-4 overflow-y-auto py-5">{cart.map((item) => <div key={item.id} className="flex gap-3 rounded-2xl bg-white p-3"><img src={item.imageUrl} alt="" onError={handleMenuImageError} className="h-20 w-20 rounded-xl object-cover" /><div className="min-w-0 flex-1"><h3 className="truncate font-display font-semibold">{item.name}</h3><p className="mt-1 text-xs font-semibold">{money(item.price)}</p><div className="mt-2 flex items-center gap-3"><button onClick={() => updateQuantity(item, -1)} aria-label={`Remove one ${item.name}`} className="grid h-7 w-7 place-items-center rounded-full bg-cream"><Minus size={13} /></button><span className="text-xs font-semibold">{item.quantity}</span><button onClick={() => updateQuantity(item, 1)} aria-label={`Add one ${item.name}`} className="grid h-7 w-7 place-items-center rounded-full bg-lime/50"><Plus size={13} /></button></div></div><span className="self-start text-xs font-bold">{money(item.price * item.quantity)}</span></div>)}</div>
+            <div className="flex-1 space-y-4 overflow-y-auto py-5">{cart.map((item) => <div key={item.id} className="flex gap-3 rounded-2xl bg-white p-3"><img src={item.imageUrl} alt="" onError={handleMenuImageError} className="h-20 w-20 rounded-xl object-cover" /><div className="min-w-0 flex-1"><h3 className="truncate font-display font-semibold">{item.name}</h3><p className="mt-1 text-xs font-semibold">{money(item.price)}</p>{item.contents && <p className="mt-1 text-[11px] text-forest/55">{item.contents}</p>}<div className="mt-2 flex items-center gap-3"><button onClick={() => updateQuantity(item, -1)} aria-label={`Remove one ${item.name}`} className="grid h-7 w-7 place-items-center rounded-full bg-cream"><Minus size={13} /></button><span className="text-xs font-semibold">{item.quantity}</span><button onClick={() => updateQuantity(item, 1)} aria-label={`Add one ${item.name}`} className="grid h-7 w-7 place-items-center rounded-full bg-lime/50"><Plus size={13} /></button></div></div><span className="self-start text-xs font-bold">{money(item.price * item.quantity)}</span></div>)}</div>
             <div className="border-t border-forest/10 pt-5"><div className="flex justify-between text-sm"><span className="text-forest/55">Subtotal</span><span className="font-bold">{money(subtotal)}</span></div><p className="mt-2 text-[11px] text-forest/45">Taxes and any extras confirmed at the restaurant.</p><button onClick={() => { setCartOpen(false); setCheckoutOpen(true); }} className="mt-5 w-full rounded-full bg-forest py-3.5 text-sm font-semibold text-white transition hover:bg-leaf">Continue to checkout <ArrowRight size={15} className="ml-1 inline" /></button></div>
           </>}
         </aside>
@@ -1621,7 +1672,7 @@ function App() {
               <div className="receipt-table-wrap">
                 <table className="receipt-items">
                   <thead><tr><th scope="col">Item</th><th scope="col">Qty</th><th scope="col">Unit price</th><th scope="col">Amount</th></tr></thead>
-                  <tbody>{orderReceipt.items.map((item) => <tr key={`${item.name}-${item.quantity}`}><td>{item.name}</td><td>{item.quantity}</td><td>{money(item.unitPrice)}</td><td>{money(item.unitPrice * item.quantity)}</td></tr>)}</tbody>
+                  <tbody>{orderReceipt.items.map((item) => <tr key={`${item.name}-${item.quantity}`}><td>{item.name}{item.contents && <small className="block text-xs text-forest/55">Includes: {item.contents}</small>}</td><td>{item.quantity}</td><td>{money(item.unitPrice)}</td><td>{money(item.unitPrice * item.quantity)}</td></tr>)}</tbody>
                 </table>
               </div>
               <div className="receipt-totals">
@@ -1662,7 +1713,7 @@ function App() {
           <div className="checkout-body">
             <section className="checkout-section">
               <h3>Order summary <span>{cartCount} {cartCount === 1 ? "item" : "items"}</span></h3>
-              <div className="checkout-items">{cart.map((item) => <div key={item.id} className="checkout-item"><img src={item.imageUrl} alt="" onError={handleMenuImageError} /><div><strong>{item.name}</strong><span>Qty: {item.quantity} · {money(item.price)} each</span></div><b>{money(item.price * item.quantity)}</b></div>)}</div>
+              <div className="checkout-items">{cart.map((item) => <div key={item.id} className="checkout-item"><img src={item.imageUrl} alt="" onError={handleMenuImageError} /><div><strong>{item.name}</strong><span>Qty: {item.quantity} · {money(item.price)} each</span>{item.contents && <small className="block text-xs text-forest/55">{item.contents}</small>}</div><b>{money(item.price * item.quantity)}</b></div>)}</div>
               <div className="checkout-total-row"><span>Subtotal</span><strong>{money(subtotal)}</strong></div>
               {deliveryFee > 0 && <div className="checkout-total-row"><span>Delivery</span><strong>{money(deliveryFee)}</strong></div>}
               {dealDiscount > 0 && <div className="checkout-total-row"><span>Deal · {matchingDeal.code}</span><strong>−{money(dealDiscount)}</strong></div>}
@@ -1685,6 +1736,9 @@ function App() {
               {matchingDeal && <p className="text-xs text-leaf">{matchingDeal.title} · {matchingDeal.description}</p>}
               {customerUser && (customerEngagement?.points || 0) >= 100 && subtotal - dealDiscount >= 5 && <label className="flex items-start gap-3 rounded-xl bg-[#e9eee4] p-3 text-sm"><input type="checkbox" checked={useRewards} onChange={(event) => setUseRewards(event.target.checked)} /><span>Use 100 points for up to GH₵5 off <small className="block text-xs text-forest/60">Available points: {customerEngagement.points}</small></span></label>}
               {customerUser && (customerEngagement?.points || 0) >= 100 && subtotal - dealDiscount < 5 && <p className="text-xs text-forest/60">Add at least GH₵5 of menu items after offers to redeem your 100-point reward.</p>}
+              {customerUser
+                ? <p className="rounded-xl bg-[#e9eee4] p-3 text-xs text-forest/70">You’re signed in. Earn 1 point per GH₵1 spent on food when this paid order is completed. Delivery fees do not earn points.</p>
+                : <div className="rounded-xl bg-[#e9eee4] p-3 text-xs text-forest/70"><p>Want rewards? Sign in or create an account to earn 1 point per GH₵1 spent on food after your paid order is completed. Delivery fees do not earn points. Guest orders can be claimed later using the same verified email.</p><div className="mt-2 flex gap-3"><button type="button" className="font-semibold text-leaf underline" onClick={() => { setAuthMode("login"); setAuthOpen(true); }}>Sign in</button><button type="button" className="font-semibold text-leaf underline" onClick={() => { setAuthMode("register"); setAuthOpen(true); }}>Create an account</button></div></div>}
             </section>
             <section className="checkout-section checkout-payment"><span className="checkout-payment-icon"><ShoppingBag size={18} /></span><div><h3>Secure payment by Paystack</h3><p>After placing your order, you’ll be redirected to Paystack to pay securely. The kitchen will only receive your order after Paystack confirms payment.</p></div></section>
             <section className="checkout-section checkout-contact">

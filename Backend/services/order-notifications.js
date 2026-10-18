@@ -439,7 +439,10 @@ export async function sendOrderNotifications(order) {
     `We received order ${order.orderNumber} (${fulfillment}).`,
     ...(order.deliveryAddress ? [`Delivery address: ${order.deliveryAddress}`] : []),
     "",
-    ...order.items.map((item) => `${item.quantity} × ${item.name} — ${formatMoney(item.unitPrice * item.quantity)}`),
+    ...order.items.flatMap((item) => [
+      `${item.quantity} × ${item.name} — ${formatMoney(item.unitPrice * item.quantity)}`,
+      ...(item.contents ? [`Includes: ${item.contents}`] : []),
+    ]),
     "",
     ...breakdown.map(([label, amount]) => `${label}: ${amount < 0 ? "−" : ""}${formatMoney(Math.abs(amount))}`),
     `Status: ${order.status}`,
@@ -450,7 +453,7 @@ export async function sendOrderNotifications(order) {
     "Thank you for choosing OrderPulse.",
   ];
   const htmlItems = order.items.map((item) =>
-    `<li>${item.quantity} × ${escapeHtml(item.name)} — ${formatMoney(item.unitPrice * item.quantity)}</li>`,
+    `<li>${item.quantity} × ${escapeHtml(item.name)} — ${formatMoney(item.unitPrice * item.quantity)}${item.contents ? `<br><small>Includes: ${escapeHtml(item.contents)}</small>` : ""}</li>`,
   ).join("");
   const [email, staffEmail] = await Promise.all([
     sendEmail({
@@ -470,7 +473,10 @@ export async function sendOrderNotifications(order) {
         `Phone: ${order.phone}`,
         ...(order.deliveryAddress ? [`Delivery address: ${order.deliveryAddress}`] : []),
         "",
-        ...order.items.map((item) => `${item.quantity} × ${item.name} — ${formatMoney(item.unitPrice * item.quantity)}`),
+        ...order.items.flatMap((item) => [
+          `${item.quantity} × ${item.name} — ${formatMoney(item.unitPrice * item.quantity)}`,
+          ...(item.contents ? [`Includes: ${item.contents}`] : []),
+        ]),
         "",
         ...breakdown.map(([label, amount]) => `${label}: ${amount < 0 ? "−" : ""}${formatMoney(Math.abs(amount))}`),
         "",

@@ -27,9 +27,47 @@ function readDeal(deal) {
   };
 }
 
+async function readMealBundle(database, bundle) {
+  const items = await database.all(`
+    SELECT m.id, m.name, bi.quantity, m.available, m.stock_quantity
+    FROM meal_bundle_items bi
+    JOIN menu_items m ON m.id = bi.menu_item_id
+    WHERE bi.bundle_id = ?
+    ORDER BY m.name
+  `, [bundle.id]);
+  return {
+    id: bundle.id,
+    title: bundle.title,
+    description: bundle.description,
+    price: bundle.price_pesewas / 100,
+    active: Boolean(bundle.active),
+    startsAt: bundle.starts_at,
+    endsAt: bundle.ends_at,
+    items: items.map(({ id, name, quantity }) => ({ id, name, quantity })),
+    availableForSale: !items.some((item) =>
+      !item.available || (item.stock_quantity !== null && item.stock_quantity < item.quantity),
+    ),
+  };
+}
+
+async function listMealBundles(database, activeOnly = false) {
+  const now = activeAt();
+  const where = activeOnly
+    ? "WHERE active = TRUE AND (starts_at IS NULL OR starts_at <= ?) AND (ends_at IS NULL OR ends_at > ?)"
+    : "";
+  const params = activeOnly ? [now, now] : [];
+  const bundles = await database.all(`
+    SELECT id, title, description, price_pesewas, active, starts_at, ends_at
+    FROM meal_bundles ${where}
+    ORDER BY created_at DESC, id DESC
+  `, params);
+  const result = await Promise.all(bundles.map((bundle) => readMealBundle(database, bundle)));
+  return activeOnly ? result.filter((bundle) => bundle.availableForSale) : result;
+}
+
 export const restaurantOptions = async (_request, response) => {
   const now = activeAt();
-  const [areas, deals, tables] = await Promise.all([
+  const [areas, deals, bundles, tables] = await Promise.all([
     db.all("SELECT id, area_name, fee_pesewas FROM delivery_areas WHERE enabled = TRUE ORDER BY area_name"),
     db.all(`
       SELECT id, title, description, code, discount_pesewas, active, starts_at, ends_at
@@ -38,6 +76,7 @@ export const restaurantOptions = async (_request, response) => {
         AND (ends_at IS NULL OR ends_at > ?)
       ORDER BY created_at DESC, id DESC
     `, [now, now]),
+    listMealBundles(db, true),
     db.all("SELECT id, name FROM restaurant_tables ORDER BY id"),
   ]);
   return response.json({
@@ -47,6 +86,7 @@ export const restaurantOptions = async (_request, response) => {
       fee: area.fee_pesewas / 100,
     })),
     deals: deals.map(readDeal),
+    bundles,
     tables: tables.map((table) => ({ id: table.id, name: table.name })),
   });
 };
@@ -141,14 +181,25 @@ export const customerOrderHistory = async (request, response) => {
     status: order.status,
     paymentStatus: order.payment_status,
     createdAt: order.created_at,
-    items: (await db.all(`
-      SELECT menu_item_id, item_name, quantity
-      FROM order_items WHERE order_id = ? ORDER BY id
-    `, [order.id])).map((item) => ({
-      menuItemId: item.menu_item_id,
-      name: item.item_name,
-      quantity: item.quantity,
-    })),
+    items: [
+      ...(await db.all(`
+        SELECT menu_item_id, item_name, quantity
+        FROM order_items WHERE order_id = ? AND bundle_component = FALSE ORDER BY id
+      `, [order.id])).map((item) => ({
+        menuItemId: item.menu_item_id,
+        name: item.item_name,
+        quantity: item.quantity,
+      })),
+      ...(await db.all(`
+        SELECT meal_bundle_id, item_name, contents, quantity
+        FROM order_meal_bundles WHERE order_id = ? ORDER BY id
+      `, [order.id])).map((bundle) => ({
+        bundleId: bundle.meal_bundle_id,
+        name: bundle.item_name,
+        quantity: bundle.quantity,
+        contents: bundle.contents,
+      })),
+    ],
   }))));
 };
 
@@ -271,4 +322,84 @@ export const updateDealStatus = async (request, response) => {
     FROM restaurant_deals WHERE id = ?
   `, [id]);
   return response.json(readDeal(deal));
+};
+
+export const managerMealBundles = async (_request, response) => {
+  return response.json(await listMealBundles(db));
+};
+
+export const createMealBundle = async (request, response) => {
+  const { title, description, price, items, startsAt = null, endsAt = null } = request.body ?? {};
+  const start = startsAt ? new Date(startsAt) : null;
+  const end = endsAt ? new Date(endsAt) : null;
+  if (
+    !validText(title, 2, 120) ||
+    !validText(description, 3, 500) ||
+    !Number.isFinite(price) ||
+    price < 0.01 ||
+    price > 100000 ||
+    !Array.isArray(items) ||
+    items.length < 1 ||
+    items.length > 20 ||
+    items.some((item) =>
+      !Number.isSafeInteger(item?.id) ||
+      item.id < 1 ||
+      !Number.isInteger(item?.quantity) ||
+      item.quantity < 1 ||
+      item.quantity > 20,
+    ) ||
+    new Set(items.map((item) => item.id)).size !== items.length ||
+    (startsAt && (!start || Number.isNaN(start.getTime()))) ||
+    (endsAt && (!end || Number.isNaN(end.getTime()))) ||
+    (start && end && end <= start)
+  ) {
+    return response.status(400).json({ error: "Check the bundle title, description, price, included menu items and optional active dates." });
+  }
+  const includedItems = await db.all(
+    `SELECT id FROM menu_items
+     WHERE id IN (${items.map(() => "?").join(", ")})
+       AND available = TRUE AND (stock_quantity IS NULL OR stock_quantity > 0)`,
+    items.map((item) => item.id),
+  );
+  if (includedItems.length !== items.length) {
+    return response.status(400).json({ error: "One or more selected menu items no longer exist." });
+  }
+  const result = await db.transaction(async (transaction) => {
+    const bundleResult = await transaction.run(`
+      INSERT INTO meal_bundles (title, description, price_pesewas, starts_at, ends_at)
+      VALUES (?, ?, ?, ?, ?)
+    `, [
+      title.trim(),
+      description.trim(),
+      Math.round(price * 100),
+      start?.toISOString() || null,
+      end?.toISOString() || null,
+    ]);
+    for (const item of items) {
+      await transaction.run(
+        "INSERT INTO meal_bundle_items (bundle_id, menu_item_id, quantity) VALUES (?, ?, ?)",
+        [bundleResult.lastInsertRowid, item.id, item.quantity],
+      );
+    }
+    return transaction.get(`
+      SELECT id, title, description, price_pesewas, active, starts_at, ends_at
+      FROM meal_bundles WHERE id = ?
+    `, [bundleResult.lastInsertRowid]);
+  });
+  return response.status(201).json(await readMealBundle(db, result));
+};
+
+export const updateMealBundleStatus = async (request, response) => {
+  const id = validId(request.params.id);
+  const { active } = request.body ?? {};
+  if (!id || typeof active !== "boolean") {
+    return response.status(400).json({ error: "Choose whether the meal bundle is active." });
+  }
+  const result = await db.run("UPDATE meal_bundles SET active = ? WHERE id = ?", [active, id]);
+  if (result.changes === 0) return response.status(404).json({ error: "Meal bundle not found." });
+  const bundle = await db.get(`
+    SELECT id, title, description, price_pesewas, active, starts_at, ends_at
+    FROM meal_bundles WHERE id = ?
+  `, [id]);
+  return response.json(await readMealBundle(db, bundle));
 };

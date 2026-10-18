@@ -299,6 +299,24 @@ test("orders are validated and persisted with a cedi total", async () => {
   assert.ok(feedbackData.count >= 1);
   assert.ok(feedbackData.averageRating >= 1 && feedbackData.averageRating <= 5);
   assert.ok(feedbackData.feedback.some((entry) => entry.orderNumber === result.orderNumber));
+
+  const guestRewards = await fetch(`${baseUrl}/api/customer/engagement`);
+  assert.equal(guestRewards.status, 401);
+  const guestPasswordHash = await bcrypt.hash("guest-reward-account-123", 4);
+  await db.run(`
+    INSERT INTO users (name, email, phone, password_hash, role, email_verified)
+    VALUES (?, ?, ?, ?, 'customer', TRUE)
+  `, ["Ama Mensah", "ama@example.com", "0241234567", guestPasswordHash]);
+  const customerLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "ama@example.com", password: "guest-reward-account-123" }),
+  });
+  assert.equal(customerLogin.status, 200);
+  const claimedRewards = await fetch(`${baseUrl}/api/customer/engagement`, {
+    headers: { cookie: sessionCookie(customerLogin) },
+  });
+  assert.ok((await claimedRewards.json()).points >= Math.floor(result.total));
 });
 
 test("customers can save favourites, earn and redeem points, use delivery and meal offers, and order by table QR", async () => {
@@ -348,9 +366,24 @@ test("customers can save favourites, earn and redeem points, use delivery and me
     }),
   });
   assert.equal(dealResponse.status, 201);
+  const bundleResponse = await fetch(`${baseUrl}/api/manager/meal-bundles`, {
+    method: "POST",
+    headers: { ...customerHeaders, cookie: managerCookie },
+    body: JSON.stringify({
+      title: "Feature test bundle",
+      description: "A bundle with two featured dishes.",
+      price: 25,
+      items: [{ id: menuItem.id, quantity: 2 }],
+    }),
+  });
+  assert.equal(bundleResponse.status, 201);
+  const bundle = await bundleResponse.json();
+  assert.equal(bundle.price, 25);
+  assert.deepEqual(bundle.items.map(({ id, quantity }) => ({ id, quantity })), [{ id: menuItem.id, quantity: 2 }]);
   const options = await (await fetch(`${baseUrl}/api/restaurant-options`)).json();
   assert.ok(options.deliveryAreas.some((option) => option.id === area.id && option.fee === 3.5));
   assert.ok(options.deals.some((deal) => deal.code === "FEATURE5"));
+  assert.ok(options.bundles.some((option) => option.id === bundle.id && option.price === 25));
   assert.ok(options.tables.length > 0);
 
   const subtotalPesewas = Math.round(menuItem.price * 20 * 100);
@@ -359,6 +392,45 @@ test("customers can save favourites, earn and redeem points, use delivery and me
     headers: customerHeaders,
     body: JSON.stringify(payload),
   });
+  const bundleOrderResponse = await placeOrder({
+    customerName: "Feature Customer",
+    customerEmail: "features@test.example",
+    phone: "0241234567",
+    orderType: "pickup",
+    items: [],
+    bundles: [{ id: bundle.id, quantity: 2 }],
+    dealCode: "FEATURE5",
+  });
+  assert.equal(bundleOrderResponse.status, 201);
+  const bundleOrder = await bundleOrderResponse.json();
+  assert.equal(bundleOrder.subtotal, 50);
+  assert.equal(bundleOrder.dealDiscount, 5);
+  assert.equal(bundleOrder.total, 45);
+  assert.deepEqual(bundleOrder.items, [{
+    name: "Feature test bundle",
+    quantity: 2,
+    unitPrice: 25,
+    contents: `4 × ${menuItem.name}`,
+  }]);
+  const bundleOrderRow = await db.get("SELECT id FROM orders WHERE order_number = ?", [bundleOrder.orderNumber]);
+  const bundledIngredients = await db.all(
+    "SELECT quantity, bundle_component FROM order_items WHERE order_id = ?",
+    [bundleOrderRow.id],
+  );
+  assert.deepEqual(bundledIngredients, [{ quantity: 4, bundle_component: true }]);
+  const bundleTracked = await fetch(`${baseUrl}/api/order-tracking`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ orderNumber: bundleOrder.orderNumber, phone: "0241234567" }),
+  });
+  assert.equal((await bundleTracked.json()).items[0].contents, `4 × ${menuItem.name}`);
+  const bundleStaffOrders = await fetch(`${baseUrl}/api/staff/orders`, { headers: { cookie: managerCookie } });
+  assert.ok((await bundleStaffOrders.json()).some((order) =>
+    order.orderNumber === bundleOrder.orderNumber &&
+    order.items[0].unitPrice === 25 &&
+    order.items[0].contents === `4 × ${menuItem.name}`,
+  ));
+
   const firstOrderResponse = await placeOrder({
     customerName: "Feature Customer",
     customerEmail: "features@test.example",

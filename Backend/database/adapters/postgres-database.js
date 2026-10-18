@@ -131,13 +131,43 @@ const schema = `
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS meal_bundles (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    price_pesewas INTEGER NOT NULL CHECK (price_pesewas > 0),
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    starts_at TIMESTAMPTZ,
+    ends_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS meal_bundle_items (
+    id SERIAL PRIMARY KEY,
+    bundle_id INTEGER NOT NULL REFERENCES meal_bundles(id) ON DELETE CASCADE,
+    menu_item_id INTEGER NOT NULL REFERENCES menu_items(id),
+    quantity INTEGER NOT NULL CHECK (quantity BETWEEN 1 AND 20),
+    UNIQUE (bundle_id, menu_item_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS order_meal_bundles (
+    id SERIAL PRIMARY KEY,
+    order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    meal_bundle_id INTEGER REFERENCES meal_bundles(id) ON DELETE SET NULL,
+    item_name TEXT NOT NULL,
+    contents TEXT NOT NULL DEFAULT '',
+    unit_price_pesewas INTEGER NOT NULL CHECK (unit_price_pesewas > 0),
+    quantity INTEGER NOT NULL CHECK (quantity > 0)
+  );
+
   CREATE TABLE IF NOT EXISTS order_items (
     id SERIAL PRIMARY KEY,
     order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
     menu_item_id INTEGER NOT NULL REFERENCES menu_items(id),
     item_name TEXT NOT NULL,
     unit_price_pesewas INTEGER NOT NULL,
-    quantity INTEGER NOT NULL CHECK (quantity > 0)
+    quantity INTEGER NOT NULL CHECK (quantity > 0),
+    bundle_component BOOLEAN NOT NULL DEFAULT FALSE
   );
 
   CREATE TABLE IF NOT EXISTS order_feedback (
@@ -264,6 +294,7 @@ await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS deal_code TEXT");
 await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS deal_discount_pesewas INTEGER NOT NULL DEFAULT 0");
 await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS rewards_points_used INTEGER NOT NULL DEFAULT 0");
 await pool.query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS rewards_discount_pesewas INTEGER NOT NULL DEFAULT 0");
+await pool.query("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS bundle_component BOOLEAN NOT NULL DEFAULT FALSE");
 await pool.query("ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_order_type_check");
 await pool.query("ALTER TABLE orders ADD CONSTRAINT orders_order_type_check CHECK (order_type IN ('pickup', 'dine-in', 'delivery'))");
 if (process.env.PG_SKIP_SEED !== "1") await seedDatabase(db);

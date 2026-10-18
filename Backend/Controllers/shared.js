@@ -130,11 +130,26 @@ export async function readOrders(database = db) {
     paymentStatus: order.payment_status,
     createdAt: order.created_at,
     updatedAt: order.updated_at,
-    items: (await database.all("SELECT * FROM order_items WHERE order_id = ? ORDER BY id", [order.id])).map((item) => ({
-      name: item.item_name,
-      menuItemId: item.menu_item_id,
-      quantity: item.quantity,
-      unitPrice: item.unit_price_pesewas / 100,
-    })),
+    items: [
+      ...(await database.all(
+        "SELECT * FROM order_items WHERE order_id = ? AND bundle_component = FALSE ORDER BY id",
+        [order.id],
+      )).map((item) => ({
+        name: item.item_name,
+        menuItemId: item.menu_item_id,
+        quantity: item.quantity,
+        unitPrice: item.unit_price_pesewas / 100,
+      })),
+      ...(await database.all(
+        "SELECT meal_bundle_id, item_name, contents, unit_price_pesewas, quantity FROM order_meal_bundles WHERE order_id = ? ORDER BY id",
+        [order.id],
+      )).map((bundle) => ({
+        bundleId: bundle.meal_bundle_id,
+        name: bundle.item_name,
+        contents: bundle.contents,
+        quantity: bundle.quantity,
+        unitPrice: bundle.unit_price_pesewas / 100,
+      })),
+    ],
   })));
 }

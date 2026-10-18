@@ -108,6 +108,9 @@ app.patch("/api/manager/delivery-areas/:id", engagementController.updateDelivery
 app.get("/api/manager/deals", engagementController.managerDeals);
 app.post("/api/manager/deals", engagementController.createDeal);
 app.patch("/api/manager/deals/:id", engagementController.updateDealStatus);
+app.get("/api/manager/meal-bundles", engagementController.managerMealBundles);
+app.post("/api/manager/meal-bundles", engagementController.createMealBundle);
+app.patch("/api/manager/meal-bundles/:id", engagementController.updateMealBundleStatus);
 app.get("/api/manager/applications/:id/resume", adminController.applicationResume);
 app.post("/api/manager/staff", postController.createStaff);
 app.patch("/api/manager/staff/:id", adminController.updateStaff);

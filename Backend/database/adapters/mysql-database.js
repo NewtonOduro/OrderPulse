@@ -108,6 +108,39 @@ const schema = `
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+  CREATE TABLE IF NOT EXISTS meal_bundles (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(120) NOT NULL,
+    description VARCHAR(500) NOT NULL,
+    price_pesewas INT NOT NULL CHECK (price_pesewas > 0),
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    starts_at DATETIME(3),
+    ends_at DATETIME(3),
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+  CREATE TABLE IF NOT EXISTS meal_bundle_items (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    bundle_id INT UNSIGNED NOT NULL,
+    menu_item_id INT UNSIGNED NOT NULL,
+    quantity INT NOT NULL CHECK (quantity BETWEEN 1 AND 20),
+    UNIQUE KEY uq_meal_bundle_item (bundle_id, menu_item_id),
+    CONSTRAINT fk_meal_bundle_items_bundle FOREIGN KEY (bundle_id) REFERENCES meal_bundles(id) ON DELETE CASCADE,
+    CONSTRAINT fk_meal_bundle_items_menu FOREIGN KEY (menu_item_id) REFERENCES menu_items(id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+  CREATE TABLE IF NOT EXISTS order_meal_bundles (
+    id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    order_id INT UNSIGNED NOT NULL,
+    meal_bundle_id INT UNSIGNED,
+    item_name VARCHAR(255) NOT NULL,
+    contents TEXT NOT NULL,
+    unit_price_pesewas INT NOT NULL CHECK (unit_price_pesewas > 0),
+    quantity INT NOT NULL CHECK (quantity > 0),
+    CONSTRAINT fk_order_meal_bundles_order FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+    CONSTRAINT fk_order_meal_bundles_bundle FOREIGN KEY (meal_bundle_id) REFERENCES meal_bundles(id) ON DELETE SET NULL
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
   CREATE TABLE IF NOT EXISTS order_items (
     id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     order_id INT UNSIGNED NOT NULL,
@@ -115,6 +148,7 @@ const schema = `
     item_name VARCHAR(255) NOT NULL,
     unit_price_pesewas INT NOT NULL,
     quantity INT NOT NULL CHECK (quantity > 0),
+    bundle_component BOOLEAN NOT NULL DEFAULT FALSE,
     CONSTRAINT fk_order_items_order FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
     CONSTRAINT fk_order_items_menu FOREIGN KEY (menu_item_id) REFERENCES menu_items(id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -292,6 +326,7 @@ await ensureColumn(pool, "orders", "deal_code", "VARCHAR(40) NULL");
 await ensureColumn(pool, "orders", "deal_discount_pesewas", "INT NOT NULL DEFAULT 0");
 await ensureColumn(pool, "orders", "rewards_points_used", "INT NOT NULL DEFAULT 0");
 await ensureColumn(pool, "orders", "rewards_discount_pesewas", "INT NOT NULL DEFAULT 0");
+await ensureColumn(pool, "order_items", "bundle_component", "BOOLEAN NOT NULL DEFAULT FALSE");
 
 export const db = createDatabaseAdapter(pool);
 if (process.env.DB_SKIP_SEED !== "1") await seedDatabase(db);

@@ -101,6 +101,7 @@ function StaffDashboard({ onExit, isOnline }) {
   const [staffUsers, setStaffUsers] = useState([]);
   const [deliveryAreas, setDeliveryAreas] = useState([]);
   const [deals, setDeals] = useState([]);
+  const [mealBundles, setMealBundles] = useState([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -148,18 +149,20 @@ function StaffDashboard({ onExit, isOnline }) {
     }
     knownOrderStates.current = currentStates;
     if (role === "manager") {
-      const [nextActivities, nextStaff, nextApplications, nextDeliveryAreas, nextDeals] = await Promise.all([
+      const [nextActivities, nextStaff, nextApplications, nextDeliveryAreas, nextDeals, nextMealBundles] = await Promise.all([
         request("/api/manager/activities"),
         request("/api/manager/staff"),
         request("/api/manager/applications"),
         request("/api/manager/delivery-areas"),
         request("/api/manager/deals"),
+        request("/api/manager/meal-bundles"),
       ]);
       setActivities(nextActivities);
       setStaffUsers(nextStaff);
       setApplications(nextApplications);
       setDeliveryAreas(nextDeliveryAreas);
       setDeals(nextDeals);
+      setMealBundles(nextMealBundles);
     }
   }, []);
 
@@ -344,7 +347,7 @@ function StaffDashboard({ onExit, isOnline }) {
         {activeTab === "activity" && user.role === "manager" && <ManagerActivity activities={activities} />}
         {activeTab === "applications" && user.role === "manager" && <JobApplications applications={applications} />}
         {activeTab === "team" && user.role === "manager" && <TeamManagement users={staffUsers} busy={busy} onAction={runAction} />}
-        {activeTab === "offers" && user.role === "manager" && <DealsManagement deals={deals} busy={busy} onAction={runAction} />}
+        {activeTab === "offers" && user.role === "manager" && <DealsManagement deals={deals} bundles={mealBundles} menuItems={menuItems} busy={busy} onAction={runAction} />}
         {activeTab === "delivery" && user.role === "manager" && <DeliveryManagement areas={deliveryAreas} busy={busy} onAction={runAction} />}
       </main>
     </div>
@@ -462,7 +465,30 @@ function DeliveryManagement({ areas, busy, onAction }) {
   </section>;
 }
 
-function DealsManagement({ deals, busy, onAction }) {
+function DealsManagement({ deals, bundles, menuItems, busy, onAction }) {
+  function addBundle(event) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const startsAt = form.get("bundleStartsAt");
+    const endsAt = form.get("bundleEndsAt");
+    const items = menuItems
+      .map((item) => ({ id: item.id, quantity: Number(form.get(`bundle-item-${item.id}`) || 0) }))
+      .filter((item) => item.quantity > 0);
+    const payload = {
+      title: form.get("bundleTitle"),
+      description: form.get("bundleDescription"),
+      price: Number(form.get("bundlePrice")),
+      items,
+      startsAt: startsAt ? new Date(startsAt).toISOString() : null,
+      endsAt: endsAt ? new Date(endsAt).toISOString() : null,
+    };
+    onAction(async () => {
+      await request("/api/manager/meal-bundles", null, { method: "POST", body: JSON.stringify(payload) });
+      formElement.reset();
+    }, "Priced meal bundle published.");
+  }
+
   function addDeal(event) {
     event.preventDefault();
     const formElement = event.currentTarget;
@@ -484,7 +510,26 @@ function DealsManagement({ deals, busy, onAction }) {
   }
 
   return <section className="staff-content">
-    <div className="staff-section-intro"><div><h2>Meal deals and specials</h2><p>Create a code customers can enter at checkout. Discounts are applied to menu items, not delivery fees.</p></div><span className="staff-count">{deals.filter((deal) => deal.active).length} active offers</span></div>
+    <div className="staff-section-intro"><div><h2>Meal deals and specials</h2><p>Create fixed-price bundles customers add to their bag, or publish a fixed-amount discount code.</p></div><span className="staff-count">{bundles.filter((bundle) => bundle.active).length + deals.filter((deal) => deal.active).length} active offers</span></div>
+    <details className="staff-create-menu">
+      <summary><Plus size={16} /> Create a priced meal bundle</summary>
+      <form className="staff-menu-form" onSubmit={addBundle}>
+        <label className="field-label">Bundle title<input name="bundleTitle" required minLength="2" maxLength="120" placeholder="Family feast" /></label>
+        <label className="field-label">Bundle price in GH₵<input name="bundlePrice" required type="number" min="0.01" max="100000" step="0.01" /></label>
+        <label className="field-label">Starts (optional)<input name="bundleStartsAt" type="datetime-local" /></label>
+        <label className="field-label">Ends (optional)<input name="bundleEndsAt" type="datetime-local" /></label>
+        <label className="field-label staff-menu-wide">Description<textarea name="bundleDescription" required minLength="3" maxLength="500" rows="2" placeholder="Describe the bundle for guests." /></label>
+        <fieldset className="staff-menu-wide">
+          <legend className="field-label">Included menu items and quantities</legend>
+          <div className="grid gap-2 sm:grid-cols-2">{menuItems.filter((item) => item.listedAvailable && item.stockQuantity !== 0).map((item) => <label key={item.id} className="flex items-center justify-between gap-3 rounded-xl bg-white p-3 text-sm"><span>{item.name} · {money(item.price)}</span><input aria-label={`Quantity of ${item.name} in bundle`} name={`bundle-item-${item.id}`} type="number" min="0" max="20" step="1" defaultValue="0" /></label>)}</div>
+        </fieldset>
+        <button disabled={busy} className="staff-primary staff-menu-wide"><Gift size={15} /> Publish priced bundle</button>
+      </form>
+    </details>
+    {bundles.length > 0 && <div className="staff-panel staff-team-list"><div className="staff-panel-head"><div><h2>Priced bundles</h2><p>Customers add a bundle as a bag item. The bundle price is charged once per bundle.</p></div></div>
+      {bundles.map((bundle) => <div className="staff-list-row" key={bundle.id}><div className="staff-row-avatar"><Gift size={16} /></div><div className="staff-row-main"><strong>{bundle.title} · {money(bundle.price)}</strong><small>{bundle.items.map((item) => `${item.quantity} × ${item.name}`).join(", ")} · {bundle.description}{bundle.startsAt ? ` · from ${new Date(bundle.startsAt).toLocaleString("en-GH")}` : ""}{bundle.endsAt ? ` · until ${new Date(bundle.endsAt).toLocaleString("en-GH")}` : ""}</small></div><StatusPill>{bundle.active ? bundle.availableForSale ? "available" : "item unavailable" : "cancelled"}</StatusPill><button disabled={busy} className="staff-secondary" onClick={() => onAction(() => request(`/api/manager/meal-bundles/${bundle.id}`, null, { method: "PATCH", body: JSON.stringify({ active: !bundle.active }) }), `${bundle.title} ${bundle.active ? "paused" : "activated"}.`)}>{bundle.active ? "Pause" : "Activate"}</button></div>)}
+    </div>}
+    <div className="staff-section-intro"><div><h2>Discount codes</h2><p>Codes reduce the food subtotal by a fixed amount, not delivery fees.</p></div><span className="staff-count">{deals.filter((deal) => deal.active).length} active codes</span></div>
     <form className="staff-create-user" onSubmit={addDeal}>
       <label className="field-label">Offer title<input name="title" required minLength="2" maxLength="120" placeholder="Lunch special" /></label>
       <label className="field-label">Offer code<input name="code" required minLength="3" maxLength="40" pattern="[A-Za-z0-9_-]+" placeholder="LUNCH5" /></label>
@@ -505,7 +550,7 @@ function OrderRow({ order }) {
   const fulfillment = order.orderType === "delivery"
     ? `Delivery · ${order.deliveryArea || "area pending"}`
     : order.orderType === "dine-in" && order.tableId ? `Dine in · table ${order.tableId}` : order.orderType;
-  return <div className="staff-list-row"><div className="staff-row-avatar"><ChefHat size={16} /></div><div className="staff-row-main"><strong title={`Full order number: ${order.orderNumber}`}>{displayOrderNumber(order.orderNumber)}</strong><small>{fulfillment} · {order.items.map((item) => `${item.quantity}× ${item.name}`).join(", ")}</small></div><StatusPill>{order.status}</StatusPill></div>;
+  return <div className="staff-list-row"><div className="staff-row-avatar"><ChefHat size={16} /></div><div className="staff-row-main"><strong title={`Full order number: ${order.orderNumber}`}>{displayOrderNumber(order.orderNumber)}</strong><small>{fulfillment} · {order.items.map((item) => `${item.quantity}× ${item.name}${item.contents ? ` (${item.contents})` : ""}`).join(", ")}</small></div><StatusPill>{order.status}</StatusPill></div>;
 }
 
 function EmptyState({ children }) {
@@ -669,7 +714,7 @@ function MenuManagement({ menuItems, busy, onAction, pin, manager }) {
 function Orders({ orders, busy, onAction, pin }) {
   return <section className="staff-content">
     <div className="staff-section-intro"><div><h2>All orders</h2><p>Paystack verifies payments automatically before the kitchen starts preparing an order.</p></div><span className="staff-count">{orders.length} total</span></div>
-    {orders.length === 0 ? <EmptyState>Guest orders will appear here.</EmptyState> : <div className="staff-card-list">{orders.map((order) => <article className="order-card" key={order.id}><div className="order-card-top"><div><h3 title={`Full order number: ${order.orderNumber}`}>{displayOrderNumber(order.orderNumber)}</h3><p>{order.customerName} · {order.phone} · {order.orderType}{order.deliveryArea ? ` · ${order.deliveryArea}` : ""}{order.tableId ? ` · table ${order.tableId}` : ""}</p></div><strong>{money(order.total)}</strong></div><div className="order-card-items">{order.items.map((item, index) => <span key={`${order.id}-${index}`}>{item.quantity} × {item.name}</span>)}</div>{order.deliveryAddress && <p className="order-payment-review">Delivery address: {order.deliveryAddress}</p>}{order.dealCode && <p className="order-payment-review">Offer: {order.dealCode} · −{money(order.dealDiscount)}</p>}{order.rewardsPointsUsed > 0 && <p className="order-payment-review">Rewards used: {order.rewardsPointsUsed} points</p>}<div className="order-card-bottom">{order.paymentStatus !== "paid" ? <><span className="status-pill status-pending">Paystack payment pending</span><p className="order-payment-review">Preparation stays locked until Paystack confirms this transaction.</p></> : <><StatusPill>{orderStatusLabels[order.status] ? orderStatusLabels[order.status] : order.status}</StatusPill><StatusPill>{order.paymentStatus}</StatusPill><label className="staff-select-label">Update status<select value={order.status} disabled={busy} onChange={(event) => onAction(() => request(`/api/staff/orders/${order.id}`, null, { method: "PATCH", body: JSON.stringify({ status: event.target.value }) }), `${order.orderNumber} marked ${event.target.value}.`)}>{orderStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label></>}</div></article>)}</div>}
+    {orders.length === 0 ? <EmptyState>Guest orders will appear here.</EmptyState> : <div className="staff-card-list">{orders.map((order) => <article className="order-card" key={order.id}><div className="order-card-top"><div><h3 title={`Full order number: ${order.orderNumber}`}>{displayOrderNumber(order.orderNumber)}</h3><p>{order.customerName} · {order.phone} · {order.orderType}{order.deliveryArea ? ` · ${order.deliveryArea}` : ""}{order.tableId ? ` · table ${order.tableId}` : ""}</p></div><strong>{money(order.total)}</strong></div><div className="order-card-items">{order.items.map((item, index) => <span key={`${order.id}-${index}`}>{item.quantity} × {item.name}{item.contents ? ` (includes ${item.contents})` : ""}</span>)}</div>{order.deliveryAddress && <p className="order-payment-review">Delivery address: {order.deliveryAddress}</p>}{order.dealCode && <p className="order-payment-review">Offer: {order.dealCode} · −{money(order.dealDiscount)}</p>}{order.rewardsPointsUsed > 0 && <p className="order-payment-review">Rewards used: {order.rewardsPointsUsed} points</p>}<div className="order-card-bottom">{order.paymentStatus !== "paid" ? <><span className="status-pill status-pending">Paystack payment pending</span><p className="order-payment-review">Preparation stays locked until Paystack confirms this transaction.</p></> : <><StatusPill>{orderStatusLabels[order.status] ? orderStatusLabels[order.status] : order.status}</StatusPill><StatusPill>{order.paymentStatus}</StatusPill><label className="staff-select-label">Update status<select value={order.status} disabled={busy} onChange={(event) => onAction(() => request(`/api/staff/orders/${order.id}`, null, { method: "PATCH", body: JSON.stringify({ status: event.target.value }) }), `${order.orderNumber} marked ${event.target.value}.`)}>{orderStatuses.map((status) => <option key={status} value={status}>{status}</option>)}</select></label></>}</div></article>)}</div>}
   </section>;
 }
 

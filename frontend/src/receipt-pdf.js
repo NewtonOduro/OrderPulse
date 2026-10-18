@@ -130,7 +130,10 @@ export function downloadReceiptPdf(order) {
 
   drawItemsHeading();
   for (const item of order.items) {
-    const itemLines = wrap(item.name);
+    const itemLines = [
+      ...wrap(item.name),
+      ...(item.contents ? wrap(`Includes: ${item.contents}`, 56) : []),
+    ];
     const rowHeight = Math.max(28, itemLines.length * 12 + 12);
     if (y + rowHeight > 765) {
       pages.push([]);

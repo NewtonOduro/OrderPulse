@@ -186,6 +186,7 @@ export const createOrder = async (request, response) => {
     deliveryAddress,
     deliveryAreaId,
     dealCode = "",
+    bundles = [],
     useRewards = false,
     tableId = null,
   } = request.body ?? {};
@@ -197,8 +198,10 @@ export const createOrder = async (request, response) => {
     !validText(phone, 7, 30) ||
     !["pickup", "dine-in", "delivery"].includes(orderType) ||
     !Array.isArray(items) ||
-    items.length === 0 ||
     items.length > 30 ||
+    !Array.isArray(bundles) ||
+    bundles.length > 20 ||
+    (items.length === 0 && bundles.length === 0) ||
     (orderType === "delivery" && (!validText(deliveryAddress, 8, 500) || !Number.isSafeInteger(deliveryAreaId) || deliveryAreaId < 1)) ||
     (orderType !== "delivery" && (deliveryAddress || deliveryAreaId)) ||
     (tableId !== null && (!Number.isSafeInteger(tableId) || tableId < 1 || orderType !== "dine-in")) ||
@@ -219,12 +222,51 @@ export const createOrder = async (request, response) => {
   if ([...quantities.values()].some((quantity) => quantity > 20)) {
     return response.status(400).json({ error: "An item quantity cannot exceed 20." });
   }
+  const bundleQuantities = new Map();
+  for (const bundle of bundles) {
+    if (!Number.isInteger(bundle?.id) || !Number.isInteger(bundle?.quantity) || bundle.quantity < 1 || bundle.quantity > 20) {
+      return response.status(400).json({ error: "Each meal bundle needs a valid bundle and quantity between 1 and 20." });
+    }
+    bundleQuantities.set(bundle.id, (bundleQuantities.get(bundle.id) || 0) + bundle.quantity);
+  }
+  if ([...bundleQuantities.values()].some((quantity) => quantity > 20)) {
+    return response.status(400).json({ error: "A meal bundle quantity cannot exceed 20." });
+  }
 
   const requestedItems = [...quantities].map(([id, quantity]) => ({ id, quantity }));
+  const requestedBundles = [...bundleQuantities].map(([id, quantity]) => ({ id, quantity }));
   try {
     const order = await db.transaction(async (tx) => {
+      const savedBundles = [];
+      const consumedItems = new Map(requestedItems.map(({ id, quantity }) => [id, quantity]));
+      for (const { id, quantity } of requestedBundles) {
+        const bundle = await tx.get(`
+          SELECT id, title, description, price_pesewas
+          FROM meal_bundles
+          WHERE id = ? AND active = TRUE
+            AND (starts_at IS NULL OR starts_at <= ?)
+            AND (ends_at IS NULL OR ends_at > ?)
+          FOR UPDATE
+        `, [id, new Date().toISOString(), new Date().toISOString()]);
+        if (!bundle) throw new Error("MEAL_BUNDLE_UNAVAILABLE");
+        const contents = await tx.all(`
+          SELECT m.id, m.name, bi.quantity
+          FROM meal_bundle_items bi
+          JOIN menu_items m ON m.id = bi.menu_item_id
+          WHERE bi.bundle_id = ?
+          ORDER BY m.name
+        `, [id]);
+        if (!contents.length) throw new Error("MEAL_BUNDLE_UNAVAILABLE");
+        for (const item of contents) {
+          consumedItems.set(item.id, (consumedItems.get(item.id) || 0) + item.quantity * quantity);
+        }
+        savedBundles.push({ ...bundle, quantity, contents });
+      }
+      if ([...consumedItems.values()].some((quantity) => quantity > 20)) {
+        throw new Error("MENU_ITEM_ORDER_QUANTITY_EXCEEDED");
+      }
       const resolvedItems = [];
-      for (const { id, quantity } of requestedItems) {
+      for (const [id, quantity] of consumedItems) {
         const item = await tx.get(`
           SELECT * FROM menu_items
           WHERE id = ? AND available = TRUE AND (stock_quantity IS NULL OR stock_quantity > 0)
@@ -234,22 +276,27 @@ export const createOrder = async (request, response) => {
         if (item.stock_quantity !== null && item.stock_quantity < quantity) {
           throw new Error("MENU_ITEM_STOCK_INSUFFICIENT");
         }
-        resolvedItems.push({ item, quantity });
+        resolvedItems.push({ item, quantity, orderQuantity: quantities.get(id) || 0 });
       }
-      for (const { item, quantity } of resolvedItems) {
+      for (const { item, quantity: consumedQuantity } of resolvedItems) {
         if (item.stock_quantity !== null) {
           const result = await tx.run(`
             UPDATE menu_items
             SET stock_quantity = ?
             WHERE id = ? AND stock_quantity = ?
-          `, [item.stock_quantity - quantity, item.id, item.stock_quantity]);
+          `, [item.stock_quantity - consumedQuantity, item.id, item.stock_quantity]);
           if (result.changes !== 1) throw new Error("MENU_ITEM_STOCK_INSUFFICIENT");
         }
       }
-      const subtotalPesewas = resolvedItems.reduce(
-        (total, { item, quantity }) => total + item.price_pesewas * quantity,
+      const regularSubtotalPesewas = resolvedItems.reduce(
+        (total, { item, orderQuantity }) => total + item.price_pesewas * orderQuantity,
         0,
       );
+      const bundleSubtotalPesewas = savedBundles.reduce(
+        (total, bundle) => total + bundle.price_pesewas * bundle.quantity,
+        0,
+      );
+      const subtotalPesewas = regularSubtotalPesewas + bundleSubtotalPesewas;
       let deliveryFeePesewas = 0;
       let savedDeliveryArea = null;
       if (orderType === "delivery") {
@@ -327,11 +374,31 @@ export const createOrder = async (request, response) => {
         rewardsPointsUsed,
         appliedRewardsDiscountPesewas,
       ]);
-      for (const { item, quantity } of resolvedItems) {
+      for (const { item, orderQuantity } of resolvedItems) {
+        if (orderQuantity < 1) continue;
         await tx.run(`
           INSERT INTO order_items (order_id, menu_item_id, item_name, unit_price_pesewas, quantity)
           VALUES (?, ?, ?, ?, ?)
-        `, [insertedOrder.lastInsertRowid, item.id, item.name, item.price_pesewas, quantity]);
+        `, [insertedOrder.lastInsertRowid, item.id, item.name, item.price_pesewas, orderQuantity]);
+      }
+      for (const bundle of savedBundles) {
+        for (const item of bundle.contents) {
+          await tx.run(`
+            INSERT INTO order_items (order_id, menu_item_id, item_name, unit_price_pesewas, quantity, bundle_component)
+            VALUES (?, ?, ?, 0, ?, TRUE)
+          `, [insertedOrder.lastInsertRowid, item.id, `${bundle.title} · ${item.name}`, item.quantity * bundle.quantity]);
+        }
+        await tx.run(`
+          INSERT INTO order_meal_bundles (order_id, meal_bundle_id, item_name, contents, unit_price_pesewas, quantity)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `, [
+          insertedOrder.lastInsertRowid,
+          bundle.id,
+          bundle.title,
+          bundle.contents.map((item) => `${item.quantity * bundle.quantity} × ${item.name}`).join(", "),
+          bundle.price_pesewas,
+          bundle.quantity,
+        ]);
       }
       return {
         orderNumber,
@@ -354,11 +421,19 @@ export const createOrder = async (request, response) => {
         paymentStatus: "pending",
         reference: orderNumber,
         createdAt: new Date().toISOString(),
-        items: resolvedItems.map(({ item, quantity }) => ({
-          name: item.name,
-          quantity,
-          unitPrice: item.price_pesewas / 100,
-        })),
+        items: [
+          ...resolvedItems.filter(({ orderQuantity }) => orderQuantity > 0).map(({ item, orderQuantity }) => ({
+            name: item.name,
+            quantity: orderQuantity,
+            unitPrice: item.price_pesewas / 100,
+          })),
+          ...savedBundles.map((bundle) => ({
+            name: bundle.title,
+            quantity: bundle.quantity,
+            unitPrice: bundle.price_pesewas / 100,
+            contents: bundle.contents.map((item) => `${item.quantity * bundle.quantity} × ${item.name}`).join(", "),
+          })),
+        ],
       };
     });
     let checkout;
@@ -381,6 +456,9 @@ export const createOrder = async (request, response) => {
     const notifications = await sendOrderNotifications(orderWithCheckout);
     return response.status(201).json({ ...orderWithCheckout, notifications });
   } catch (error) {
+    if (error.message === "MENU_ITEM_ORDER_QUANTITY_EXCEEDED") {
+      return response.status(400).json({ error: "A combined dish quantity cannot exceed 20, including items inside meal bundles." });
+    }
     if (["MENU_ITEM_UNAVAILABLE", "MENU_ITEM_STOCK_INSUFFICIENT"].includes(error.message)) {
       return response.status(409).json({ error: "A selected menu item is unavailable or there isn't enough stock. Refresh the menu and try again." });
     }
@@ -392,6 +470,9 @@ export const createOrder = async (request, response) => {
     }
     if (error.message === "DEAL_UNAVAILABLE") {
       return response.status(409).json({ error: "That offer is not active. Check the code and its dates, then try again." });
+    }
+    if (error.message === "MEAL_BUNDLE_UNAVAILABLE") {
+      return response.status(409).json({ error: "A selected meal bundle is no longer available. Refresh the offers and try again." });
     }
     if (error.message === "LOYALTY_POINTS_INSUFFICIENT") {
       return response.status(409).json({ error: "You need at least 100 available reward points to redeem this discount." });
@@ -614,12 +695,16 @@ export const createMenuItem = async (request, response) => {
 
 
 async function readTrackedOrder(order) {
-  const [items, feedback, table] = await Promise.all([
+  const [items, bundles, feedback, table] = await Promise.all([
     db.all(`
       SELECT item_name, quantity, unit_price_pesewas
       FROM order_items
-      WHERE order_id = ?
+      WHERE order_id = ? AND bundle_component = FALSE
       ORDER BY id
+    `, [order.id]),
+    db.all(`
+      SELECT meal_bundle_id, item_name, contents, unit_price_pesewas, quantity
+      FROM order_meal_bundles WHERE order_id = ? ORDER BY id
     `, [order.id]),
     db.get("SELECT rating, comment_text, created_at FROM order_feedback WHERE order_id = ?", [order.id]),
     order.table_id ? db.get("SELECT name FROM restaurant_tables WHERE id = ?", [order.table_id]) : null,
@@ -647,11 +732,20 @@ async function readTrackedOrder(order) {
       createdAt: feedback.created_at,
     } : null,
     feedbackEligible: order.payment_status === "paid" && order.status === "completed" && !feedback,
-    items: items.map((item) => ({
-      name: item.item_name,
-      quantity: item.quantity,
-      unitPrice: item.unit_price_pesewas / 100,
-    })),
+    items: [
+      ...items.map((item) => ({
+        name: item.item_name,
+        quantity: item.quantity,
+        unitPrice: item.unit_price_pesewas / 100,
+      })),
+      ...bundles.map((bundle) => ({
+        name: bundle.item_name,
+        quantity: bundle.quantity,
+        unitPrice: bundle.unit_price_pesewas / 100,
+        contents: bundle.contents,
+        bundleId: bundle.meal_bundle_id,
+      })),
+    ],
   };
 }
 
