@@ -125,6 +125,7 @@ function App() {
   const [isMenuPage, setIsMenuPage] = useState(() => window.location.pathname === "/menu");
   const [isApplicationPage, setIsApplicationPage] = useState(() => window.location.pathname === "/apply");
   const [isAboutPage, setIsAboutPage] = useState(() => window.location.pathname === "/about");
+  const [isCustomerProfilePage, setIsCustomerProfilePage] = useState(() => window.location.pathname === "/profile");
   const [menuItems, setMenuItems] = useState([]);
   const [menuError, setMenuError] = useState("");
   const [optionsError, setOptionsError] = useState("");
@@ -208,6 +209,7 @@ function App() {
       setIsMenuPage(window.location.pathname === "/menu");
       setIsApplicationPage(window.location.pathname === "/apply");
       setIsAboutPage(window.location.pathname === "/about");
+      setIsCustomerProfilePage(window.location.pathname === "/profile");
       const params = new URLSearchParams(window.location.search);
       const table = Number(params.get("table"));
       setQrTableId(Number.isSafeInteger(table) && table > 0 ? table : null);
@@ -555,6 +557,7 @@ function App() {
     setIsMenuPage(target.pathname === "/menu");
     setIsApplicationPage(target.pathname === "/apply");
     setIsAboutPage(target.pathname === "/about");
+    setIsCustomerProfilePage(target.pathname === "/profile");
     if (target.pathname === "/apply") {
       const position = target.searchParams.get("position");
       setSelectedPosition(openPositions.some((item) => item.title === position) ? position : "");
@@ -566,7 +569,7 @@ function App() {
     });
   }
 
-  const sectionHref = (id) => isMenuPage || isApplicationPage || isAboutPage ? `/#${id}` : `#${id}`;
+  const sectionHref = (id) => isMenuPage || isApplicationPage || isAboutPage || isCustomerProfilePage ? `/#${id}` : `#${id}`;
   const menuPageContent = (
     <section className="menu-page-content mx-auto max-w-7xl px-5 py-12 md:px-10 md:py-16">
       <div className="menu-page-heading">
@@ -1250,7 +1253,7 @@ function App() {
           {(installPrompt || iosInstallAvailable) && <button className="desktop-install-button landing-action inline-flex min-h-10 items-center gap-2 rounded-full border border-forest/10 px-3 text-xs font-semibold text-forest/70 hover:border-leaf hover:text-leaf" onClick={installApp}><Download size={15} /><span className="hidden sm:inline">{iosInstallAvailable && !installPrompt ? "Add to Home Screen" : "Install app"}</span></button>}
           {installHelp && <div className="desktop-install-help install-help-popover" role="status">{installHelp}<button type="button" onClick={() => setInstallHelp("")} aria-label="Dismiss install instructions"><X size={14} /></button></div>}
           <button aria-label="Staff workspace" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2 py-2.5 text-sm font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-4" onClick={() => setStaffMode(true)}><ChefHat size={16} /><span className="hidden sm:inline">Staff</span></button>
-          {customerUser ? <div className="landing-account-actions flex items-center gap-1"><a href={sectionHref("customer-profile")} onClick={(event) => navigate(event, sectionHref("customer-profile"))} className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 text-xs font-semibold text-leaf hover:bg-forest/5 sm:px-3"><CircleUserRound size={16} /><span className="hidden md:inline">My profile</span></a><button aria-label="Sign out of your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full border border-forest/10 px-2.5 text-xs font-semibold text-forest/65 hover:border-leaf hover:text-leaf sm:px-3" onClick={signOutCustomer}><span className="hidden md:inline">Sign out</span></button></div> : <button aria-label="Sign in to your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 py-2.5 text-xs font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-3" onClick={() => { setAuthMode("login"); setAuthOpen(true); }}><CircleUserRound size={16} /><span className="hidden sm:inline">Sign in</span></button>}
+          {customerUser ? <div className="landing-account-actions flex items-center gap-1"><a href="/profile" aria-label="My profile" onClick={(event) => navigate(event, "/profile")} className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 text-xs font-semibold text-leaf hover:bg-forest/5 sm:px-3"><CircleUserRound size={16} /><span className="hidden md:inline">My profile</span></a><button aria-label="Sign out of your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full border border-forest/10 px-2.5 text-xs font-semibold text-forest/65 hover:border-leaf hover:text-leaf sm:px-3" onClick={signOutCustomer}><span className="hidden md:inline">Sign out</span></button></div> : <button aria-label="Sign in to your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 py-2.5 text-xs font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-3" onClick={() => { setAuthMode("login"); setAuthOpen(true); }}><CircleUserRound size={16} /><span className="hidden sm:inline">Sign in</span></button>}
           <button
             className="landing-action relative inline-flex items-center gap-2 rounded-full border border-forest/10 px-4 py-2.5 text-sm font-semibold transition hover:border-leaf hover:text-leaf"
             onClick={() => setCartOpen(true)}
@@ -1267,7 +1270,38 @@ function App() {
       </header>
 
       <main>
-        {isApplicationPage ? applicationPageContent : isMenuPage ? menuPageContent : isAboutPage ? aboutPageContent : <>
+        {isCustomerProfilePage
+          ? customerUser
+            ? <CustomerProfile
+              customerUser={customerUser}
+              customerOrders={customerOrders}
+              customerReservations={customerReservations}
+              customerEngagement={customerEngagement}
+              customerFavorites={customerFavorites}
+              customerFeedback={customerFeedback}
+              onBack={(event) => navigate(event, "/")}
+              onDeleted={() => {
+                setCustomerUser(null);
+                setCustomerReservations([]);
+                setCustomerEngagement(null);
+                setCustomerFavorites([]);
+                setCustomerOrders([]);
+                setCustomerFeedback([]);
+                setUseRewards(false);
+                window.history.pushState({}, "", "/");
+                setIsCustomerProfilePage(false);
+                setQrTableId(null);
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+            />
+            : <section className="mx-auto max-w-3xl px-5 py-16 text-center md:py-24">
+              <CircleUserRound size={32} className="mx-auto text-leaf" />
+              <h1 className="mt-4 font-display text-3xl font-semibold">Sign in to view your profile</h1>
+              <p className="mt-3 text-sm leading-6 text-forest/60">Your profile and restaurant history are available after you sign in to your customer account.</p>
+              <button type="button" className="staff-primary mt-6" onClick={() => { setAuthMode("login"); setAuthOpen(true); }}>Sign in</button>
+              <p className="mt-5"><a href="/" onClick={(event) => navigate(event, "/")} className="text-sm font-semibold text-leaf underline underline-offset-4">Back to home</a></p>
+            </section>
+          : isApplicationPage ? applicationPageContent : isMenuPage ? menuPageContent : isAboutPage ? aboutPageContent : <>
         <section className="landing-hero">
           <div className="landing-hero-copy">
             <span className="landing-eyebrow"><Sparkles size={14} /> AHODWO KITCHEN · GHANA ON A PLATE</span>
@@ -1425,24 +1459,6 @@ function App() {
             </div>
           </div> : <p className="mt-3 max-w-2xl text-sm leading-6 text-forest/60">Create an account to keep your favourite dishes, quickly reorder, and collect points on completed orders.</p>}
         </section>
-        {customerUser && <CustomerProfile
-          customerUser={customerUser}
-          customerOrders={customerOrders}
-          customerReservations={customerReservations}
-          customerEngagement={customerEngagement}
-          customerFavorites={customerFavorites}
-          customerFeedback={customerFeedback}
-          onDeleted={() => {
-            setCustomerUser(null);
-            setCustomerReservations([]);
-            setCustomerEngagement(null);
-            setCustomerFavorites([]);
-            setCustomerOrders([]);
-            setCustomerFeedback([]);
-            setUseRewards(false);
-          }}
-        />}
-
         <section className="home-menu-section" aria-labelledby="home-menu-heading">
           <div className="home-menu-heading">
             <div>

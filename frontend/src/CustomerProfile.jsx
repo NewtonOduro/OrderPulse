@@ -26,6 +26,7 @@ export default function CustomerProfile({
   customerEngagement,
   customerFavorites,
   customerFeedback,
+  onBack,
   onDeleted,
 }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -57,6 +58,9 @@ export default function CustomerProfile({
 
   return (
     <section id="customer-profile" className="mx-auto max-w-7xl scroll-mt-8 px-5 pb-10 md:px-10" aria-labelledby="customer-profile-heading">
+      <a href="/" onClick={onBack} className="mb-6 inline-flex items-center gap-2 text-sm font-semibold text-leaf underline underline-offset-4">
+        Back to home
+      </a>
       <div className="rounded-3xl bg-[#e9eee4] p-5 sm:p-7">
         <span className="text-xs font-bold uppercase tracking-[.2em] text-leaf">Your account</span>
         <h2 id="customer-profile-heading" className="mt-2 font-display text-3xl font-semibold">My profile<span>.</span></h2>

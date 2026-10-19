@@ -65,7 +65,7 @@ After a paid order is completed, customers can leave one rating from one to five
 2. A single-use verification token is stored as a SHA-256 hash and emailed. Verification links expire after 24 hours. Password-reset links expire after 60 minutes.
 3. Sign-in creates a server-side session record and sets a secure, HTTP-only cookie. The browser requests `GET /api/auth/me` to restore the session.
 4. A signed-in customer checks table availability and creates a reservation. Reservation requests are linked to their account and are managed by restaurant staff.
-5. Customers can view their profile, order and reservation history, rewards balance, saved dishes, and order feedback. Account deletion requires the current password; profile details, saved dishes, and feedback are removed, while retained order and reservation records are anonymized.
+5. Customers can open a separate profile page to view their profile, order and reservation history, rewards balance, saved dishes, and order feedback. Account deletion requires the current password; profile details, saved dishes, and feedback are removed, while retained order and reservation records are anonymized.
 
 ### Staff and manager operations
 
