@@ -6,7 +6,7 @@ import {
   revokeOtherEmailAuthTokens,
 } from "../services/email-auth.js";
 import { sendPasswordResetEmail, sendVerificationEmail } from "../services/order-notifications.js";
-import { clearSession, safeUser, setSession } from "../middleware/auth.js";
+import { clearSession, clearSessionCookie, safeUser, setSession } from "../middleware/auth.js";
 import { emailPattern, minimumPasswordLength, validText } from "./shared.js";
 
 export const register = async (request, response) => {
@@ -158,6 +158,47 @@ export const customerReservations = async (request, response) => {
   return response.json(reservations);
 };
 
+export const deleteCustomerAccount = async (request, response) => {
+  const { password } = request.body ?? {};
+  if (typeof password !== "string" || password.length > 128) {
+    return response.status(400).json({ error: "Enter your current password to delete your account." });
+  }
+
+  const deleted = await db.transaction(async (transaction) => {
+    const user = await transaction.get(
+      "SELECT password_hash FROM users WHERE id = ? AND role = 'customer' FOR UPDATE",
+      [request.user.id],
+    );
+    if (!user || !(await bcrypt.compare(password, user.password_hash))) return false;
+
+    await transaction.run(`
+      DELETE FROM order_feedback
+      WHERE order_id IN (SELECT id FROM orders WHERE customer_user_id = ?)
+    `, [request.user.id]);
+    await transaction.run(`
+      UPDATE bookings
+      SET customer_user_id = NULL, customer_name = 'Deleted customer', phone = '', notes = ''
+      WHERE customer_user_id = ?
+    `, [request.user.id]);
+    await transaction.run(`
+      UPDATE orders
+      SET customer_user_id = NULL, customer_name = 'Deleted customer', customer_email = '',
+          phone = '', delivery_address = NULL
+      WHERE customer_user_id = ?
+    `, [request.user.id]);
+    await transaction.run(`
+      UPDATE activity_logs
+      SET user_id = NULL, actor_name = 'Deleted account', actor_email = '', details = ''
+      WHERE user_id = ?
+    `, [request.user.id]);
+    await transaction.run("DELETE FROM users WHERE id = ?", [request.user.id]);
+    return true;
+  });
+
+  if (!deleted) return response.status(401).json({ error: "The password is incorrect." });
+  clearSessionCookie(response);
+  return response.status(204).end();
+};
 
 
 export const currentUser = (request, response) => response.json({ user: request.user });

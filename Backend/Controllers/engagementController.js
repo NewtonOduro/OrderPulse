@@ -101,20 +101,53 @@ async function linkVerifiedCustomerOrders(user) {
 
 export const customerEngagement = async (request, response) => {
   await linkVerifiedCustomerOrders(request.user);
-  const [points, favorites, recentOrders] = await Promise.all([
+  const [points, favorites, recentOrders, rewardOrders] = await Promise.all([
     readLoyaltyBalance(db, request.user.id),
     db.get("SELECT COUNT(*) AS count FROM customer_favorites WHERE user_id = ?", [request.user.id]),
     db.all(`
       SELECT id, order_number, order_type, total_pesewas, status, payment_status, created_at
       FROM orders WHERE customer_user_id = ? ORDER BY created_at DESC, id DESC LIMIT 5
     `, [request.user.id]),
+    db.all(`
+      SELECT order_number, total_pesewas, delivery_fee_pesewas, status, payment_status,
+             rewards_points_used, created_at
+      FROM orders
+      WHERE customer_user_id = ? AND (status = 'completed' OR rewards_points_used > 0)
+      ORDER BY created_at DESC, id DESC
+    `, [request.user.id]),
   ]);
   const balance = Math.max(0, points.earned - points.reserved);
+  const loyaltyHistory = rewardOrders.flatMap((order) => {
+    const history = [];
+    if (order.status === "completed" && order.payment_status === "paid") {
+      const earned = Math.floor(
+        Math.max(0, Number(order.total_pesewas) - Number(order.delivery_fee_pesewas)) / 100,
+      );
+      if (earned > 0) history.push({
+        orderNumber: order.order_number,
+        type: "earned",
+        points: earned,
+        createdAt: order.created_at,
+      });
+    }
+    if (Number(order.rewards_points_used) > 0) {
+      history.push({
+        orderNumber: order.order_number,
+        type: order.status === "cancelled"
+          ? "released"
+          : order.payment_status === "paid" ? "redeemed" : "reserved",
+        points: Number(order.rewards_points_used),
+        createdAt: order.created_at,
+      });
+    }
+    return history;
+  });
   return response.json({
     points: balance,
     pointsToNextReward: Math.max(0, rewardThreshold - (balance % rewardThreshold)),
     rewardDiscount: rewardPesewas / 100,
     favoriteCount: Number(favorites.count),
+    loyaltyHistory,
     recentOrders: recentOrders.map((order) => ({
       id: order.id,
       orderNumber: order.order_number,
@@ -171,7 +204,7 @@ export const customerOrderHistory = async (request, response) => {
   await linkVerifiedCustomerOrders(request.user);
   const orders = await db.all(`
     SELECT id, order_number, order_type, total_pesewas, status, payment_status, created_at
-    FROM orders WHERE customer_user_id = ? ORDER BY created_at DESC, id DESC LIMIT 30
+    FROM orders WHERE customer_user_id = ? ORDER BY created_at DESC, id DESC
   `, [request.user.id]);
   return response.json(await Promise.all(orders.map(async (order) => ({
     id: order.id,
@@ -201,6 +234,23 @@ export const customerOrderHistory = async (request, response) => {
       })),
     ],
   }))));
+};
+
+export const customerFeedbackHistory = async (request, response) => {
+  await linkVerifiedCustomerOrders(request.user);
+  const feedback = await db.all(`
+    SELECT o.order_number, f.rating, f.comment_text, f.created_at
+    FROM order_feedback f
+    JOIN orders o ON o.id = f.order_id
+    WHERE o.customer_user_id = ?
+    ORDER BY f.created_at DESC, f.id DESC
+  `, [request.user.id]);
+  return response.json(feedback.map((entry) => ({
+    orderNumber: entry.order_number,
+    rating: entry.rating,
+    comment: entry.comment_text,
+    createdAt: entry.created_at,
+  })));
 };
 
 export const managerDeliveryAreas = async (_request, response) => {

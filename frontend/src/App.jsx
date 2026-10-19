@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import AuthDialog from "./AuthDialog.jsx";
+import CustomerProfile from "./CustomerProfile.jsx";
 import StaffDashboard from "./StaffDashboard.jsx";
 import { beverageGroups, beverageSubcategories, menuCategories } from "./menu-categories.js";
 import { displayOrderNumber } from "./order-number.js";
@@ -160,6 +161,7 @@ function App() {
   const [customerEngagement, setCustomerEngagement] = useState(null);
   const [customerFavorites, setCustomerFavorites] = useState([]);
   const [customerOrders, setCustomerOrders] = useState([]);
+  const [customerFeedback, setCustomerFeedback] = useState([]);
   const [pendingFavorite, setPendingFavorite] = useState(null);
   const [checkoutOrderType, setCheckoutOrderType] = useState(() =>
     new URLSearchParams(window.location.search).has("table") ? "dine-in" : "pickup",
@@ -285,9 +287,11 @@ function App() {
 
   useEffect(() => {
     if (!customerUser) {
+      setCustomerReservations([]);
       setCustomerEngagement(null);
       setCustomerFavorites([]);
       setCustomerOrders([]);
+      setCustomerFeedback([]);
       setUseRewards(false);
       return undefined;
     }
@@ -296,14 +300,18 @@ function App() {
       fetch("/api/customer/engagement", { credentials: "same-origin", signal: controller.signal }),
       fetch("/api/customer/favorites", { credentials: "same-origin", signal: controller.signal }),
       fetch("/api/customer/orders", { credentials: "same-origin", signal: controller.signal }),
+      fetch("/api/customer/reservations", { credentials: "same-origin", signal: controller.signal }),
+      fetch("/api/customer/feedback", { credentials: "same-origin", signal: controller.signal }),
     ])
-      .then(async ([engagementResponse, favoritesResponse, ordersResponse]) => {
-        const results = await Promise.all([engagementResponse, favoritesResponse, ordersResponse].map((response) => response.json()));
-        const failed = [engagementResponse, favoritesResponse, ordersResponse].find((response) => !response.ok);
-        if (failed) throw new Error(results[[engagementResponse, favoritesResponse, ordersResponse].indexOf(failed)]?.error || "We couldn't load your OrderPulse account.");
+      .then(async (responses) => {
+        const results = await Promise.all(responses.map((response) => response.json()));
+        const failedIndex = responses.findIndex((response) => !response.ok);
+        if (failedIndex !== -1) throw new Error(results[failedIndex]?.error || "We couldn't load your OrderPulse account.");
         setCustomerEngagement(results[0]);
         setCustomerFavorites(results[1]);
         setCustomerOrders(results[2]);
+        setCustomerReservations(results[3]);
+        setCustomerFeedback(results[4]);
       })
       .catch((error) => {
         if (error.name !== "AbortError") setBookingMessage(error.message);
@@ -911,13 +919,6 @@ function App() {
       setPendingFavorite(null);
       saveFavorite(menuItem);
     }
-    fetch("/api/customer/reservations", { credentials: "same-origin" })
-      .then(async (response) => {
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || "We couldn't load your reservations.");
-        setCustomerReservations(result);
-      })
-      .catch((error) => setBookingMessage(error.message));
   }
 
   async function signOutCustomer() {
@@ -929,6 +930,7 @@ function App() {
       setCustomerEngagement(null);
       setCustomerFavorites([]);
       setCustomerOrders([]);
+      setCustomerFeedback([]);
     } catch (error) {
       setBookingMessage(error.message);
     }
@@ -1248,7 +1250,7 @@ function App() {
           {(installPrompt || iosInstallAvailable) && <button className="desktop-install-button landing-action inline-flex min-h-10 items-center gap-2 rounded-full border border-forest/10 px-3 text-xs font-semibold text-forest/70 hover:border-leaf hover:text-leaf" onClick={installApp}><Download size={15} /><span className="hidden sm:inline">{iosInstallAvailable && !installPrompt ? "Add to Home Screen" : "Install app"}</span></button>}
           {installHelp && <div className="desktop-install-help install-help-popover" role="status">{installHelp}<button type="button" onClick={() => setInstallHelp("")} aria-label="Dismiss install instructions"><X size={14} /></button></div>}
           <button aria-label="Staff workspace" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2 py-2.5 text-sm font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-4" onClick={() => setStaffMode(true)}><ChefHat size={16} /><span className="hidden sm:inline">Staff</span></button>
-          {customerUser ? <div className="landing-account-actions flex items-center gap-1"><span className="hidden max-w-28 truncate text-xs font-semibold text-leaf sm:inline">{customerUser.name.split(" ")[0]}</span><button aria-label="Sign out of your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full border border-forest/10 px-2.5 text-xs font-semibold text-forest/65 hover:border-leaf hover:text-leaf sm:px-3" onClick={signOutCustomer}><CircleUserRound size={16} /><span className="hidden md:inline">Sign out</span></button></div> : <button aria-label="Sign in to your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 py-2.5 text-xs font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-3" onClick={() => { setAuthMode("login"); setAuthOpen(true); }}><CircleUserRound size={16} /><span className="hidden sm:inline">Sign in</span></button>}
+          {customerUser ? <div className="landing-account-actions flex items-center gap-1"><a href={sectionHref("customer-profile")} onClick={(event) => navigate(event, sectionHref("customer-profile"))} className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 text-xs font-semibold text-leaf hover:bg-forest/5 sm:px-3"><CircleUserRound size={16} /><span className="hidden md:inline">My profile</span></a><button aria-label="Sign out of your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full border border-forest/10 px-2.5 text-xs font-semibold text-forest/65 hover:border-leaf hover:text-leaf sm:px-3" onClick={signOutCustomer}><span className="hidden md:inline">Sign out</span></button></div> : <button aria-label="Sign in to your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 py-2.5 text-xs font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-3" onClick={() => { setAuthMode("login"); setAuthOpen(true); }}><CircleUserRound size={16} /><span className="hidden sm:inline">Sign in</span></button>}
           <button
             className="landing-action relative inline-flex items-center gap-2 rounded-full border border-forest/10 px-4 py-2.5 text-sm font-semibold transition hover:border-leaf hover:text-leaf"
             onClick={() => setCartOpen(true)}
@@ -1423,6 +1425,23 @@ function App() {
             </div>
           </div> : <p className="mt-3 max-w-2xl text-sm leading-6 text-forest/60">Create an account to keep your favourite dishes, quickly reorder, and collect points on completed orders.</p>}
         </section>
+        {customerUser && <CustomerProfile
+          customerUser={customerUser}
+          customerOrders={customerOrders}
+          customerReservations={customerReservations}
+          customerEngagement={customerEngagement}
+          customerFavorites={customerFavorites}
+          customerFeedback={customerFeedback}
+          onDeleted={() => {
+            setCustomerUser(null);
+            setCustomerReservations([]);
+            setCustomerEngagement(null);
+            setCustomerFavorites([]);
+            setCustomerOrders([]);
+            setCustomerFeedback([]);
+            setUseRewards(false);
+          }}
+        />}
 
         <section className="home-menu-section" aria-labelledby="home-menu-heading">
           <div className="home-menu-heading">

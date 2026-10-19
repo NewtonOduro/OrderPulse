@@ -95,6 +95,8 @@ app.get("/api/customer/favorites", requireUser, requireCustomer, engagementContr
 app.post("/api/customer/favorites/:menuItemId", requireUser, requireCustomer, engagementController.addCustomerFavorite);
 app.delete("/api/customer/favorites/:menuItemId", requireUser, requireCustomer, engagementController.removeCustomerFavorite);
 app.get("/api/customer/orders", requireUser, requireCustomer, engagementController.customerOrderHistory);
+app.get("/api/customer/feedback", requireUser, requireCustomer, engagementController.customerFeedbackHistory);
+app.delete("/api/customer/account", requireUser, requireCustomer, userController.deleteCustomerAccount);
 
 app.use("/api/staff", requireUser, requireStaff, auditStaffActivity);
 app.use("/api/manager", requireUser, requireManager, auditStaffActivity);

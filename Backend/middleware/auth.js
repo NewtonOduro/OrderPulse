@@ -46,15 +46,19 @@ export async function setSession(response, userId) {
   });
 }
 
-export async function clearSession(request, response) {
-  const token = readSessionToken(request);
-  if (token) await db.run("DELETE FROM sessions WHERE token_hash = ?", [hashToken(token)]);
+export function clearSessionCookie(response) {
   response.clearCookie(sessionCookie, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
   });
+}
+
+export async function clearSession(request, response) {
+  const token = readSessionToken(request);
+  if (token) await db.run("DELETE FROM sessions WHERE token_hash = ?", [hashToken(token)]);
+  clearSessionCookie(response);
 }
 
 export async function requireUser(request, response, next) {

@@ -1260,3 +1260,114 @@ test("career applications persist CVs and can only be retrieved by managers", as
   assert.equal(resumeResponse.headers.get("content-type"), "application/pdf");
   assert.deepEqual(Buffer.from(await resumeResponse.arrayBuffer()), resumeBytes);
 });
+
+test("customers can review account history and delete their profile while transaction records are anonymized", async () => {
+  const password = "profile-delete-test-password";
+  const passwordHash = await bcrypt.hash(password, 4);
+  const insertedUser = await db.run(`
+    INSERT INTO users (name, email, phone, password_hash, role, email_verified)
+    VALUES (?, ?, ?, ?, 'customer', TRUE)
+  `, ["History Customer", "profile-history@test.example", "0241234567", passwordHash]);
+  const userId = insertedUser.lastInsertRowid;
+  const login = await fetch(`${baseUrl}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: "profile-history@test.example", password }),
+  });
+  assert.equal(login.status, 200);
+  const cookie = sessionCookie(login);
+  const headers = { "content-type": "application/json", cookie };
+  const [menuItem] = await db.all("SELECT id FROM menu_items ORDER BY id LIMIT 1");
+  const insertedOrder = await db.run(`
+    INSERT INTO orders (
+      order_number, customer_name, customer_email, phone, order_type, total_pesewas,
+      status, payment_status, customer_user_id, delivery_address
+    ) VALUES (?, ?, ?, ?, 'delivery', 2599, 'completed', 'paid', ?, ?)
+  `, ["GH-ABCDEF1234567890", "History Customer", "profile-history@test.example", "0241234567", userId, "12 Example Road"]);
+  for (let index = 1; index <= 30; index += 1) {
+    await db.run(`
+      INSERT INTO orders (order_number, customer_name, customer_email, phone, order_type, total_pesewas, status, payment_status, customer_user_id)
+      VALUES (?, ?, ?, ?, 'pickup', 1000, 'cancelled', 'paid', ?)
+    `, [`GH-PROFILE-HISTORY-${index}`, "History Customer", "profile-history@test.example", "0241234567", userId]);
+  }
+  await db.run(`
+    INSERT INTO order_items (order_id, menu_item_id, item_name, unit_price_pesewas, quantity)
+    VALUES (?, ?, ?, 2599, 1)
+  `, [insertedOrder.lastInsertRowid, menuItem.id, "History meal"]);
+  await db.run(
+    "INSERT INTO order_feedback (order_id, rating, comment_text) VALUES (?, 5, ?)",
+    [insertedOrder.lastInsertRowid, "Excellent meal."],
+  );
+  const insertedBooking = await db.run(`
+    INSERT INTO bookings (customer_name, phone, booking_date, booking_time, party_size, notes, customer_user_id, status)
+    VALUES (?, ?, '2027-01-20', '19:00', 4, ?, ?, 'requested')
+  `, ["History Customer", "0241234567", "Window table", userId]);
+  const favorite = await fetch(`${baseUrl}/api/customer/favorites/${menuItem.id}`, {
+    method: "POST",
+    headers,
+  });
+  assert.equal(favorite.status, 204);
+  await createEmailAuthToken(userId, "reset_password");
+  await db.run(`
+    INSERT INTO activity_logs (user_id, actor_name, actor_email, action, entity, details)
+    VALUES (?, ?, ?, 'test action', 'test entity', ?)
+  `, [userId, "History Customer", "profile-history@test.example", "Personal details"]);
+
+  const [ordersResponse, reservationsResponse, feedbackResponse, engagementResponse] = await Promise.all([
+    fetch(`${baseUrl}/api/customer/orders`, { headers }),
+    fetch(`${baseUrl}/api/customer/reservations`, { headers }),
+    fetch(`${baseUrl}/api/customer/feedback`, { headers }),
+    fetch(`${baseUrl}/api/customer/engagement`, { headers }),
+  ]);
+  assert.equal(ordersResponse.status, 200);
+  const customerOrderHistory = await ordersResponse.json();
+  assert.equal(customerOrderHistory.length, 31);
+  assert.ok(customerOrderHistory.find((order) => order.orderNumber === "GH-ABCDEF1234567890").items.some((item) => item.name === "History meal"));
+  assert.equal(reservationsResponse.status, 200);
+  assert.equal((await reservationsResponse.json())[0].notes, "Window table");
+  assert.equal(feedbackResponse.status, 200);
+  assert.equal((await feedbackResponse.json())[0].comment, "Excellent meal.");
+  assert.equal(engagementResponse.status, 200);
+  const engagementHistory = await engagementResponse.json();
+  assert.equal(engagementHistory.points, 25);
+  assert.equal(engagementHistory.loyaltyHistory[0].type, "earned");
+  assert.equal(engagementHistory.loyaltyHistory[0].points, 25);
+
+  const wrongPassword = await fetch(`${baseUrl}/api/customer/account`, {
+    method: "DELETE",
+    headers,
+    body: JSON.stringify({ password: "not-the-password" }),
+  });
+  assert.equal(wrongPassword.status, 401);
+  assert.ok(await db.get("SELECT id FROM users WHERE id = ?", [userId]));
+
+  const deleted = await fetch(`${baseUrl}/api/customer/account`, {
+    method: "DELETE",
+    headers,
+    body: JSON.stringify({ password }),
+  });
+  assert.equal(deleted.status, 204);
+  assert.equal((await fetch(`${baseUrl}/api/auth/me`, { headers: { cookie } })).status, 401);
+  assert.equal(await db.get("SELECT id FROM users WHERE id = ?", [userId]), null);
+  assert.equal(await db.get("SELECT token_hash FROM sessions WHERE user_id = ?", [userId]), null);
+  assert.equal(await db.get("SELECT id FROM customer_favorites WHERE user_id = ?", [userId]), null);
+  assert.equal(await db.get("SELECT id FROM email_auth_tokens WHERE user_id = ?", [userId]), null);
+
+  const retainedOrder = await db.get("SELECT * FROM orders WHERE id = ?", [insertedOrder.lastInsertRowid]);
+  assert.equal(retainedOrder.customer_user_id, null);
+  assert.equal(retainedOrder.customer_name, "Deleted customer");
+  assert.equal(retainedOrder.customer_email, "");
+  assert.equal(retainedOrder.phone, "");
+  assert.equal(retainedOrder.delivery_address, null);
+  const retainedBooking = await db.get("SELECT * FROM bookings WHERE id = ?", [insertedBooking.lastInsertRowid]);
+  assert.equal(retainedBooking.customer_user_id, null);
+  assert.equal(retainedBooking.customer_name, "Deleted customer");
+  assert.equal(retainedBooking.phone, "");
+  assert.equal(retainedBooking.notes, "");
+  assert.equal(await db.get("SELECT id FROM order_feedback WHERE order_id = ?", [insertedOrder.lastInsertRowid]), null);
+  const anonymizedActivity = await db.get("SELECT user_id, actor_name, actor_email, details FROM activity_logs WHERE action = 'test action'");
+  assert.equal(anonymizedActivity.user_id, null);
+  assert.equal(anonymizedActivity.actor_name, "Deleted account");
+  assert.equal(anonymizedActivity.actor_email, "");
+  assert.equal(anonymizedActivity.details, "");
+});
