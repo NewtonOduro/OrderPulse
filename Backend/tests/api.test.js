@@ -320,6 +320,40 @@ test("orders are validated and persisted with a cedi total", async () => {
 });
 
 test("customers can save favourites, earn and redeem points, use delivery and meal offers, and order by table QR", async () => {
+  const managerHeaders = { "content-type": "application/json", cookie: managerCookie };
+  const initialAreasResponse = await fetch(`${baseUrl}/api/manager/delivery-areas`, { headers: managerHeaders });
+  assert.equal(initialAreasResponse.status, 200);
+  const initialAreas = await initialAreasResponse.json();
+  const expectedKumasiAreas = [
+    "Ahodwo",
+    "Adum",
+    "Asokwa",
+    "Bantama",
+    "Suame",
+    "Santasi",
+    "Kwadaso",
+    "Tafo",
+    "Asafo",
+    "KNUST/Ayeduase",
+  ];
+  for (const areaName of expectedKumasiAreas) {
+    assert.ok(initialAreas.some((area) => area.name === areaName && !area.enabled), `${areaName} should be seeded and disabled until configured`);
+  }
+  const ahodwo = initialAreas.find((area) => area.name === "Ahodwo");
+  assert.ok(ahodwo);
+  assert.equal(ahodwo.enabled, false);
+  const enabledAhodwoResponse = await fetch(`${baseUrl}/api/manager/delivery-areas/${ahodwo.id}`, {
+    method: "PATCH",
+    headers: managerHeaders,
+    body: JSON.stringify({ fee: 4.5, enabled: true }),
+  });
+  assert.equal(enabledAhodwoResponse.status, 200);
+  const enabledAhodwo = await enabledAhodwoResponse.json();
+  assert.equal(enabledAhodwo.fee, 4.5);
+  assert.equal(enabledAhodwo.enabled, true);
+  const publicAreas = await (await fetch(`${baseUrl}/api/restaurant-options`)).json();
+  assert.ok(publicAreas.deliveryAreas.some((area) => area.id === ahodwo.id && area.name === "Ahodwo" && area.fee === 4.5));
+
   const passwordHash = await bcrypt.hash("customer-feature-test-123", 4);
   await db.run(`
     INSERT INTO users (name, email, phone, password_hash, role, email_verified)
@@ -656,8 +690,21 @@ test("customers must create an account or sign in before reserving", async () =>
   const storedVerificationToken = await db.get("SELECT token_hash, expires_at FROM email_auth_tokens WHERE purpose = 'verify_email' ORDER BY id DESC LIMIT 1");
   assert.equal(storedVerificationToken.token_hash, createHash("sha256").update(verificationToken).digest("hex"));
   const verificationExpiryMs = Date.parse(storedVerificationToken.expires_at);
-  assert.ok(verificationExpiryMs >= Date.now() + 24 * 60 * 60 * 1000 - 5_000);
-  assert.ok(verificationExpiryMs <= Date.now() + 24 * 60 * 60 * 1000);
+  assert.ok(verificationExpiryMs >= Date.now() + 15 * 60 * 1000 - 5_000);
+  assert.ok(verificationExpiryMs <= Date.now() + 15 * 60 * 1000);
+  const expiredVerificationToken = await createEmailAuthToken(registeredUser.id, "verify_email");
+  await db.run(
+    "UPDATE email_auth_tokens SET expires_at = ? WHERE token_hash = ?",
+    [new Date(Date.now() - 1_000).toISOString(), createHash("sha256").update(expiredVerificationToken).digest("hex")],
+  );
+  const expiredVerification = await fetch(`${baseUrl}/api/auth/verify-email`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: expiredVerificationToken }),
+  });
+  assert.equal(expiredVerification.status, 400);
+  const expiredVerificationUser = await db.get("SELECT email_verified FROM users WHERE id = ?", [registeredUser.id]);
+  assert.equal(expiredVerificationUser.email_verified, false);
   const verification = await fetch(`${baseUrl}/api/auth/verify-email`, {
     method: "POST",
     headers: { "content-type": "application/json" },

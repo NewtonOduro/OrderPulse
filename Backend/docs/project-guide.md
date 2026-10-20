@@ -62,14 +62,14 @@ After a paid order is completed, customers can leave one rating from one to five
 ### Register and reserve
 
 1. A customer registers with name, email, phone, and a password of at least 12 characters.
-2. A single-use verification token is stored as a SHA-256 hash and emailed. Verification links expire after 24 hours. Password-reset links expire after 60 minutes.
+2. A single-use verification token is stored as a SHA-256 hash and emailed. Verification links expire after 15 minutes. Password-reset links expire after 60 minutes.
 3. Sign-in creates a server-side session record and sets a secure, HTTP-only cookie. The browser requests `GET /api/auth/me` to restore the session.
 4. A customer opens the dedicated `/reserve` page to check table availability and request a reservation. They must sign in first; reservation requests are linked to their account and managed by restaurant staff.
 5. Customers can open a separate profile page to view their profile, order and reservation history, rewards balance, saved dishes, and order feedback. Account deletion requires the current password; profile details, saved dishes, and feedback are removed, while retained order and reservation records are anonymized.
 
 ### Staff and manager operations
 
-Staff can view operational summaries, tables, reservations, menu items, and paid order tickets. Staff can update table/reservation/order states and flag menu availability. Managers can additionally manage staff accounts, applications/resume downloads, menu edits, inventory, delivery areas, meal deals, and manager reports. Table QR codes are available on each table card.
+Staff can view operational summaries, tables, reservations, menu items, and paid order tickets. Staff can update table/reservation/order states and flag menu availability. Managers can additionally manage staff accounts, applications/resume downloads, menu edits, inventory, delivery areas, meal deals, and manager reports. Common Kumasi delivery areas are preloaded but disabled until a manager sets a fee and enables them; only enabled areas appear at checkout. Table QR codes are available on each table card.
 
 Authenticated staff and manager mutations are recorded in `activity_logs` with actor, action, entity, details, and timestamp. Deactivating a staff member revokes that user's sessions.
 
@@ -209,7 +209,7 @@ Before production use:
 - Order total and item prices are recomputed server-side. Stock decrement and order creation are transactional.
 - Payment status is only changed after server-side Paystack verification; webhook signatures are checked.
 - Career resumes are restricted by accepted extension/MIME pair and byte-size limit, then served only to a manager with download safety headers.
-- Email verification links expire after 24 hours; reset tokens last one hour and are single-use.
+- Email verification links expire after 15 minutes; reset tokens last one hour and are single-use.
 - Review and rotate any credential that may ever have been committed, pasted into a public issue, or exposed in a deployment log.
 
 ## Known implementation boundaries

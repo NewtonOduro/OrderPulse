@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { db } from "../database/database.js";
 
 const tokenLifetimes = {
-  verify_email: 24 * 60 * 60 * 1000,
+  verify_email: 15 * 60 * 1000,
   reset_password: 60 * 60 * 1000,
 };
 

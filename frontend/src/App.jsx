@@ -1455,8 +1455,10 @@ function App() {
               aria-label="Featured dishes"
               onPointerDown={(event) => {
                 if (window.matchMedia("(min-width: 768px) and (pointer: fine)").matches) return;
+                if (!event.isPrimary) return;
                 if (event.target instanceof Element && event.target.closest("button")) return;
                 featuredPointerStartX.current = event.clientX;
+                event.currentTarget.setPointerCapture(event.pointerId);
               }}
               onPointerUp={(event) => {
                 if (featuredPointerStartX.current === null) return;
@@ -1468,6 +1470,7 @@ function App() {
                 );
               }}
               onPointerCancel={() => { featuredPointerStartX.current = null; }}
+              onLostPointerCapture={() => { featuredPointerStartX.current = null; }}
             >
               {featuredItems.map((item, index) => <article
                 key={item.id}

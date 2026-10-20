@@ -370,9 +370,9 @@ export async function sendVerificationEmail({ email, name, token }) {
       "Verify your email address to activate your OrderPulse account:",
       link,
       "",
-      "This link expires in 24 hours. If you did not create this account, you can ignore this email.",
+      "This link expires in 15 minutes. If you did not create this account, you can ignore this email.",
     ].join("\n"),
-    html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(name)},</p><p>Verify your email address to activate your account.</p><p><a href="${escapeHtml(link)}" style="display:inline-block;background:#193d2d;color:white;padding:12px 20px;border-radius:24px;text-decoration:none">Verify email</a></p><p>This link expires in 24 hours. If you did not create this account, you can ignore this email.</p></div>`,
+    html: `<div style="font-family:Arial,sans-serif;color:#193d2d;max-width:560px;margin:auto"><h1>OrderPulse</h1><p>Hello ${escapeHtml(name)},</p><p>Verify your email address to activate your account.</p><p><a href="${escapeHtml(link)}" style="display:inline-block;background:#193d2d;color:white;padding:12px 20px;border-radius:24px;text-decoration:none">Verify email</a></p><p>This link expires in 15 minutes. If you did not create this account, you can ignore this email.</p></div>`,
     reference: "email verification",
   });
 }

@@ -455,11 +455,43 @@ function DeliveryManagement({ areas, busy, onAction }) {
     }, "Delivery area added.");
   }
 
+  function saveArea(event, area) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const fee = Number(form.get("fee"));
+    onAction(
+      () => request(`/api/manager/delivery-areas/${area.id}`, null, {
+        method: "PATCH",
+        body: JSON.stringify({ fee, enabled: true }),
+      }),
+      `${area.name} fee saved and delivery enabled.`,
+    );
+  }
+
+  function toggleArea(area) {
+    onAction(
+      () => request(`/api/manager/delivery-areas/${area.id}`, null, {
+        method: "PATCH",
+        body: JSON.stringify({ fee: area.fee, enabled: !area.enabled }),
+      }),
+      `${area.name} ${area.enabled ? "paused" : "enabled"}.`,
+    );
+  }
+
   return <section className="staff-content">
     <div className="staff-section-intro"><div><h2>Delivery service areas</h2><p>Only enabled areas appear at checkout. Set the delivery fee for each neighbourhood.</p></div><span className="staff-count">{areas.filter((area) => area.enabled).length} active areas</span></div>
     <form className="staff-inline-form" onSubmit={addArea}><input name="name" required minLength="2" maxLength="120" placeholder="Area or neighbourhood" /><input name="fee" required type="number" min="0" max="10000" step="0.01" placeholder="Fee in GH₵" aria-label="Delivery fee in Ghana cedis" /><button disabled={busy} className="staff-primary staff-small"><Plus size={15} /> Add area</button></form>
     <div className="staff-panel staff-team-list"><div className="staff-panel-head"><div><h2>Configured areas</h2><p>Delivery orders can only be placed into active areas.</p></div></div>
-      {areas.map((area) => <div className="staff-list-row" key={area.id}><div className="staff-row-avatar"><MapPin size={16} /></div><div className="staff-row-main"><strong>{area.name}</strong><small>Delivery fee · {money(area.fee)}</small></div><StatusPill>{area.enabled ? "available" : "cancelled"}</StatusPill><button disabled={busy} className="staff-secondary" onClick={() => onAction(() => request(`/api/manager/delivery-areas/${area.id}`, null, { method: "PATCH", body: JSON.stringify({ fee: area.fee, enabled: !area.enabled }) }), `${area.name} ${area.enabled ? "paused" : "enabled"}.`)}>{area.enabled ? "Pause" : "Enable"}</button></div>)}
+      {areas.map((area) => <div className="staff-list-row delivery-area-row" key={area.id}>
+        <div className="staff-row-avatar"><MapPin size={16} /></div>
+        <div className="staff-row-main"><strong>{area.name}</strong><small>{area.enabled || area.fee > 0 ? `Delivery fee · ${money(area.fee)}` : "Set a fee before enabling delivery"}</small></div>
+        <StatusPill>{area.enabled ? "available" : "cancelled"}</StatusPill>
+        <form className="delivery-area-fee-form" onSubmit={(event) => saveArea(event, area)}>
+          <input name="fee" required type="number" min="0" max="10000" step="0.01" defaultValue={area.fee} aria-label={`Delivery fee for ${area.name} in Ghana cedis`} />
+          <button type="submit" disabled={busy} className="staff-secondary">{area.enabled ? "Save fee" : "Save & enable"}</button>
+        </form>
+        {area.enabled && <button disabled={busy} className="staff-secondary" onClick={() => toggleArea(area)}>Pause</button>}
+      </div>)}
       {areas.length === 0 && <EmptyState>Add the neighbourhoods where the restaurant can deliver.</EmptyState>}
     </div>
   </section>;

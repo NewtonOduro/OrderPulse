@@ -1,6 +1,28 @@
 import featuredMenu from "./featured-menu.js";
 
 export async function seedDatabase(db) {
+  const defaultDeliveryAreas = [
+    "Ahodwo",
+    "Adum",
+    "Asokwa",
+    "Bantama",
+    "Suame",
+    "Santasi",
+    "Kwadaso",
+    "Tafo",
+    "Asafo",
+    "KNUST/Ayeduase",
+  ];
+  for (const areaName of defaultDeliveryAreas) {
+    const existingArea = await db.get("SELECT id FROM delivery_areas WHERE LOWER(area_name) = LOWER(?)", [areaName]);
+    if (!existingArea) {
+      await db.run(
+        "INSERT INTO delivery_areas (area_name, fee_pesewas, enabled) VALUES (?, 0, FALSE)",
+        [areaName],
+      );
+    }
+  }
+
   const initialMenu = [
     ["Jollof & grilled chicken", "Smoky party jollof, flame-grilled chicken, shito and a fresh side salad.", "Local food", 6800, "https://images.unsplash.com/photo-1604908176997-125f25cc6f3d?auto=format&fit=crop&w=900&q=85", "Guest favourite", "Ghanaian favourites", null],
     ["Waakye bowl", "Rice and beans with gari, spaghetti, egg, ripe plantain and house shito.", "Local food", 5400, "https://images.unsplash.com/photo-1512058564366-18510be2db19?auto=format&fit=crop&w=900&q=85", "Local classic", "Ghanaian favourites", null],

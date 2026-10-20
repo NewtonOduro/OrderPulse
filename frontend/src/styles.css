@@ -754,6 +754,25 @@ a {
   padding: 12px 0;
 }
 
+.delivery-area-row {
+  flex-wrap: wrap;
+}
+
+.delivery-area-fee-form {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+}
+
+.delivery-area-fee-form input {
+  width: 96px;
+  min-width: 0;
+  border: 1px solid rgb(20 37 29 / 12%);
+  border-radius: 9px;
+  padding: 7px 9px;
+  font-size: 11px;
+}
+
 .staff-row-avatar {
   display: grid;
   width: 34px;
