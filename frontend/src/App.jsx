@@ -13,6 +13,7 @@ import {
   Gift,
   Heart,
   Leaf,
+  LogOut,
   MapPin,
   Menu as MenuIcon,
   Minus,
@@ -126,6 +127,7 @@ function App() {
   const [isApplicationPage, setIsApplicationPage] = useState(() => window.location.pathname === "/apply");
   const [isAboutPage, setIsAboutPage] = useState(() => window.location.pathname === "/about");
   const [isCustomerProfilePage, setIsCustomerProfilePage] = useState(() => window.location.pathname === "/profile");
+  const [isReservationPage, setIsReservationPage] = useState(() => window.location.pathname === "/reserve");
   const [menuItems, setMenuItems] = useState([]);
   const [menuError, setMenuError] = useState("");
   const [optionsError, setOptionsError] = useState("");
@@ -147,6 +149,7 @@ function App() {
   );
   const [busy, setBusy] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [staffMode, setStaffMode] = useState(false);
   const [customerUser, setCustomerUser] = useState(null);
   const [authOpen, setAuthOpen] = useState(() => {
@@ -200,6 +203,7 @@ function App() {
     return openPositions.some((item) => item.title === position) ? position : "";
   });
   const [featuredSlideIndex, setFeaturedSlideIndex] = useState(0);
+  const accountMenuRef = useRef(null);
   const featuredSectionRef = useRef(null);
   const featuredTrackRef = useRef(null);
   const featuredPointerStartX = useRef(null);
@@ -210,6 +214,7 @@ function App() {
       setIsApplicationPage(window.location.pathname === "/apply");
       setIsAboutPage(window.location.pathname === "/about");
       setIsCustomerProfilePage(window.location.pathname === "/profile");
+      setIsReservationPage(window.location.pathname === "/reserve");
       const params = new URLSearchParams(window.location.search);
       const table = Number(params.get("table"));
       setQrTableId(Number.isSafeInteger(table) && table > 0 ? table : null);
@@ -219,6 +224,22 @@ function App() {
     window.addEventListener("popstate", syncRoute);
     return () => window.removeEventListener("popstate", syncRoute);
   }, []);
+
+  useEffect(() => {
+    if (!accountMenuOpen) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!accountMenuRef.current?.contains(event.target)) setAccountMenuOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setAccountMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [accountMenuOpen]);
 
   useEffect(() => {
     const onOnline = () => setIsOnline(true);
@@ -558,6 +579,7 @@ function App() {
     setIsApplicationPage(target.pathname === "/apply");
     setIsAboutPage(target.pathname === "/about");
     setIsCustomerProfilePage(target.pathname === "/profile");
+    setIsReservationPage(target.pathname === "/reserve");
     if (target.pathname === "/apply") {
       const position = target.searchParams.get("position");
       setSelectedPosition(openPositions.some((item) => item.title === position) ? position : "");
@@ -569,7 +591,48 @@ function App() {
     });
   }
 
-  const sectionHref = (id) => isMenuPage || isApplicationPage || isAboutPage || isCustomerProfilePage ? `/#${id}` : `#${id}`;
+  const sectionHref = (id) => isMenuPage || isApplicationPage || isAboutPage || isCustomerProfilePage || isReservationPage ? `/#${id}` : `#${id}`;
+  const reservationPageContent = (
+    <section className="mx-auto max-w-7xl px-5 py-12 md:px-10 md:py-16">
+      <div className="mx-auto mb-8 max-w-3xl">
+        <a href="/" onClick={(event) => navigate(event, "/")} className="menu-back-link"><ArrowRight size={15} /> Back to home</a>
+        <span className="mt-8 block text-xs font-bold uppercase tracking-[.22em] text-leaf">Make it a date</span>
+        <h1 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">Your table’s<br /><span className="italic text-leaf">waiting.</span></h1>
+        <p className="mt-5 max-w-xl text-sm leading-7 text-forest/60">Gather your favourite people. Sign in to request a table, check live availability, and keep track of your reservation.</p>
+      </div>
+      <div className="mx-auto max-w-3xl">
+        {customerUser ? <form onSubmit={submitBooking} className="rounded-[1.5rem] bg-white p-6 shadow-sm sm:p-8">
+          <h2 className="font-display text-2xl font-semibold">Reserve a table</h2>
+          <p className="mt-1 text-xs text-forest/50">Check live availability for a 90-minute visit. Our team will confirm your request.</p>
+          <div className="mt-5 rounded-xl bg-[#e9eee4] p-3.5"><p className="text-xs font-semibold text-forest">{customerUser.name}</p><p className="mt-1 text-[11px] text-forest/55">{customerUser.email} · {customerUser.phone}</p><p className="mt-2 text-[10px] text-leaf">Signed in · reservation will be saved to your account</p></div>
+          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+            <label className="field-label">Date<input required name="date" type="date" min={new Date().toISOString().slice(0, 10)} value={bookingSlot.date} onChange={(event) => setBookingSlot((current) => ({ ...current, date: event.target.value }))} /></label>
+            <label className="field-label">Time<select required name="time" value={bookingSlot.time} onChange={(event) => setBookingSlot((current) => ({ ...current, time: event.target.value }))}><option value="" disabled>Choose a time</option>{["11:00", "12:00", "13:00", "14:00", "17:00", "18:00", "19:00", "20:00", "20:30"].map((time) => <option key={time} value={time}>{new Date(`2000-01-01T${time}`).toLocaleTimeString("en-GH", { hour: "numeric", minute: "2-digit" })}</option>)}</select><ChevronDown size={14} className="pointer-events-none absolute bottom-4 right-4 text-forest/40" /></label>
+            <label className="field-label">Guests<select required name="partySize" value={bookingSlot.partySize} onChange={(event) => setBookingSlot((current) => ({ ...current, partySize: Number(event.target.value) }))}>{Array.from({ length: 20 }, (_, index) => index + 1).map((size) => <option key={size} value={size}>{size} {size === 1 ? "guest" : "guests"}</option>)}</select><ChevronDown size={14} className="pointer-events-none absolute bottom-4 right-4 text-forest/40" /></label>
+            <label className="field-label">Anything we should know?<textarea name="notes" rows="2" maxLength="500" placeholder="A special occasion, dietary needs..." /></label>
+          </div>
+          {availabilityLoading && <p className="mt-4 text-sm text-forest/55" role="status">Checking tables for that time…</p>}
+          {availabilityError && <p className="mt-4 rounded-xl bg-sky-50 p-3 text-sm text-sky-950" role="alert">{availabilityError}</p>}
+          {tableAvailability && <div className="mt-4 rounded-xl bg-[#e9eee4] p-3.5" aria-live="polite">
+            <p className="text-xs font-semibold text-forest">{tableAvailability.tables.length ? `${tableAvailability.tables.length} tables available` : "No tables available for this time"} · {tableAvailability.durationMinutes}-minute visit</p>
+            {tableAvailability.tables.length
+              ? <p className="mt-1 text-[11px] text-forest/60">{tableAvailability.tables.map((table) => `${table.name} (${table.seats} seats)`).join(" · ")}. Our team assigns your table when confirming.</p>
+              : <p className="mt-1 text-[11px] text-forest/60">Choose another time or date to see available tables.</p>}
+          </div>}
+          <button disabled={busy || availabilityLoading || !tableAvailability?.tables.length} className="mt-5 w-full rounded-full bg-forest px-5 py-3.5 text-sm font-semibold text-white transition hover:bg-leaf disabled:opacity-60">{busy ? "Sending request…" : "Request a table"}</button>
+          {bookingMessage && <p role="status" className="mt-4 rounded-xl bg-leaf/10 p-3 text-sm text-leaf">{bookingMessage}</p>}
+          {bookingNotifications && <div className="mt-2 rounded-xl bg-[#e9eee4] p-3 text-xs text-forest/70" role="status"><p>Email: {bookingNotifications.email.message}</p></div>}
+          {customerReservations.length > 0 && <div className="mt-6 border-t border-forest/10 pt-5"><h3 className="font-display text-lg font-semibold">Your reservations</h3><div className="mt-3 grid gap-2">{customerReservations.map((reservation) => <div key={reservation.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-cream p-3"><div><p className="text-xs font-semibold">{reservation.date} · {reservation.time}</p><p className="mt-1 text-[10px] text-forest/50">{reservation.partySize} guests{reservation.tableName ? ` · ${reservation.tableName}` : ""}</p></div><span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-semibold capitalize text-amber-800">{reservation.status}</span></div>)}</div></div>}
+        </form> : <div className="rounded-[1.5rem] bg-white p-7 shadow-sm sm:p-9">
+          <span className="grid h-12 w-12 place-items-center rounded-full bg-lime/40 text-leaf"><CircleUserRound size={22} /></span>
+          <h2 className="mt-4 font-display text-2xl font-semibold">Sign in to reserve</h2>
+          <p className="mt-2 max-w-sm text-sm leading-6 text-forest/55">Create a guest account or sign in first. Your reservation will be linked to your account so you can find it again.</p>
+          <button onClick={() => { setAuthMode("login"); setAuthOpen(true); }} className="mt-5 min-h-11 w-full rounded-full bg-forest px-5 py-3 text-sm font-semibold text-white transition hover:bg-leaf">Sign in to continue</button>
+          <p className="mt-3 text-center text-xs text-forest/50">New here? <button onClick={() => { setAuthMode("register"); setAuthOpen(true); }} className="font-semibold text-leaf underline underline-offset-4">Create an account</button></p>
+        </div>}
+      </div>
+    </section>
+  );
   const menuPageContent = (
     <section className="menu-page-content mx-auto max-w-7xl px-5 py-12 md:px-10 md:py-16">
       <div className="menu-page-heading">
@@ -615,7 +678,7 @@ function App() {
           <p>From local favourites to familiar classics, OrderPulse is a warm place to share a meal, find your next favourite, and feel at home.</p>
           <div className="about-hero-actions">
             <a href="/menu" onClick={(event) => navigate(event, "/menu")} className="about-primary-link">Explore our menu <ArrowRight size={16} /></a>
-            <a href={sectionHref("reserve")} onClick={(event) => navigate(event, sectionHref("reserve"))} className="about-secondary-link">Find your table</a>
+            <a href="/reserve" onClick={(event) => navigate(event, "/reserve")} className="about-secondary-link">Find your table</a>
           </div>
           <span className="about-hero-location"><MapPin size={15} /> Made with care in Ahodwo, Kumasi</span>
         </div>
@@ -685,7 +748,7 @@ function App() {
           <p>Stay in and settle in, pick up a meal to share, or order your favourites for home. However you join us, there is something delicious waiting.</p>
           <div className="about-experience-links">
             <a href="/menu" onClick={(event) => navigate(event, "/menu")}><span>01</span><strong>Discover the menu</strong><ArrowRight size={17} /></a>
-            <a href={sectionHref("reserve")} onClick={(event) => navigate(event, sectionHref("reserve"))}><span>02</span><strong>Gather around our table</strong><ArrowRight size={17} /></a>
+            <a href="/reserve" onClick={(event) => navigate(event, "/reserve")}><span>02</span><strong>Gather around our table</strong><ArrowRight size={17} /></a>
             <a href={sectionHref("careers")} onClick={(event) => navigate(event, sectionHref("careers"))}><span>03</span><strong>Meet the people behind it</strong><ArrowRight size={17} /></a>
           </div>
         </div>
@@ -929,6 +992,7 @@ function App() {
       const response = await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
       if (!response.ok) throw new Error("We couldn't sign you out. Please try again.");
       setCustomerUser(null);
+      setAccountMenuOpen(false);
       setCustomerReservations([]);
       setCustomerEngagement(null);
       setCustomerFavorites([]);
@@ -1247,13 +1311,55 @@ function App() {
           <a className="transition hover:text-leaf" href="/menu" onClick={(event) => navigate(event, "/menu")}>Our menu</a>
           <a className="transition hover:text-leaf" href={sectionHref("track-order")} onClick={(event) => navigate(event, sectionHref("track-order"))}>Track order</a>
           <a className="transition hover:text-leaf" href="/about" onClick={(event) => navigate(event, "/about")}>Our story</a>
-          <a className="transition hover:text-leaf" href={sectionHref("reserve")} onClick={(event) => navigate(event, sectionHref("reserve"))}>Find a table</a>
+          <a className="transition hover:text-leaf" href="/reserve" onClick={(event) => navigate(event, "/reserve")}>Find a table</a>
         </nav>
         <div className="relative flex items-center gap-2">
           {(installPrompt || iosInstallAvailable) && <button className="desktop-install-button landing-action inline-flex min-h-10 items-center gap-2 rounded-full border border-forest/10 px-3 text-xs font-semibold text-forest/70 hover:border-leaf hover:text-leaf" onClick={installApp}><Download size={15} /><span className="hidden sm:inline">{iosInstallAvailable && !installPrompt ? "Add to Home Screen" : "Install app"}</span></button>}
           {installHelp && <div className="desktop-install-help install-help-popover" role="status">{installHelp}<button type="button" onClick={() => setInstallHelp("")} aria-label="Dismiss install instructions"><X size={14} /></button></div>}
           <button aria-label="Staff workspace" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2 py-2.5 text-sm font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-4" onClick={() => setStaffMode(true)}><ChefHat size={16} /><span className="hidden sm:inline">Staff</span></button>
-          {customerUser ? <div className="landing-account-actions flex items-center gap-1"><a href="/profile" aria-label="My profile" onClick={(event) => navigate(event, "/profile")} className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 text-xs font-semibold text-leaf hover:bg-forest/5 sm:px-3"><span aria-hidden="true" className="grid size-10 place-items-center rounded-full border border-zinc-300 bg-white text-leaf shadow-sm transition hover:scale-105"><svg viewBox="0 0 256 256" fill="currentColor" className="size-7"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24ZM74.08,197.5a64,64,0,0,1,107.84,0,87.83,87.83,0,0,1-107.84,0ZM96,120a32,32,0,1,1,32,32A32,32,0,0,1,96,120Zm97.76,66.41a79.66,79.66,0,0,0-36.06-28.75,48,48,0,1,0-59.4,0,79.66,79.66,0,0,0-36.06,28.75,88,88,0,1,1,131.52,0Z" /></svg></span><span className="hidden md:inline">My profile</span></a><button aria-label="Sign out of your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full border border-forest/10 px-2.5 text-xs font-semibold text-forest/65 hover:border-leaf hover:text-leaf sm:px-3" onClick={signOutCustomer}><span className="hidden md:inline">Sign out</span></button></div> : <button aria-label="Sign in to your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 py-2.5 text-xs font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-3" onClick={() => { setAuthMode("login"); setAuthOpen(true); }}><CircleUserRound size={16} /><span className="hidden sm:inline">Sign in</span></button>}
+          {customerUser ? <div className="landing-account-actions relative" ref={accountMenuRef}>
+            <button
+              type="button"
+              aria-label="Open account menu"
+              aria-expanded={accountMenuOpen}
+              aria-haspopup="menu"
+              className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 text-xs font-semibold text-leaf hover:bg-forest/5 sm:px-3"
+              onClick={() => setAccountMenuOpen((open) => !open)}
+            >
+              <span aria-hidden="true" className="account-avatar grid size-8 place-items-center rounded-full border border-zinc-300 bg-white text-leaf shadow-sm transition hover:scale-105 sm:size-10">
+                <svg viewBox="0 0 256 256" fill="currentColor" className="size-6 sm:size-7">
+                  <path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24ZM74.08,197.5a64,64,0,0,1,107.84,0,87.83,87.83,0,0,1-107.84,0ZM96,120a32,32,0,1,1,32,32A32,32,0,0,1,96,120Zm97.76,66.41a79.66,79.66,0,0,0-36.06-28.75,48,48,0,1,0-59.4,0,79.66,79.66,0,0,0-36.06,28.75,88,88,0,1,1,131.52,0Z" />
+                </svg>
+              </span>
+              <span className="hidden md:inline">Account</span>
+            </button>
+            {accountMenuOpen && <div role="menu" aria-label="Account menu" className="absolute right-0 top-full z-50 mt-3 w-64 overflow-hidden rounded-2xl border border-forest/10 bg-white p-2 text-forest shadow-xl">
+              <div className="border-b border-forest/10 px-3 py-3">
+                <p className="truncate text-sm font-semibold">{customerUser.name}</p>
+                <p className="mt-1 truncate text-xs text-forest/55">{customerUser.email}</p>
+              </div>
+              <a
+                role="menuitem"
+                href="/profile"
+                onClick={(event) => {
+                  setAccountMenuOpen(false);
+                  navigate(event, "/profile");
+                }}
+                className="mt-1 flex min-h-11 items-center rounded-xl px-3 text-sm font-medium transition hover:bg-forest/5 hover:text-leaf focus-visible:outline-2 focus-visible:outline-leaf"
+              >
+                My profile
+              </a>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={signOutCustomer}
+                className="flex min-h-11 w-full items-center gap-2 rounded-xl px-3 text-left text-sm font-medium text-red-700 transition hover:bg-red-50 focus-visible:outline-2 focus-visible:outline-red-600"
+              >
+                <LogOut size={16} />
+                Sign out
+              </button>
+            </div>}
+          </div> : <button aria-label="Sign in to your guest account" className="landing-action inline-flex min-h-10 items-center gap-2 rounded-full px-2.5 py-2.5 text-xs font-semibold text-forest/65 transition hover:bg-forest/5 hover:text-leaf sm:px-3" onClick={() => { setAuthMode("login"); setAuthOpen(true); }}><CircleUserRound size={16} /><span className="hidden sm:inline">Sign in</span></button>}
           <button
             className="landing-action relative inline-flex items-center gap-2 rounded-full border border-forest/10 px-4 py-2.5 text-sm font-semibold transition hover:border-leaf hover:text-leaf"
             onClick={() => setCartOpen(true)}
@@ -1266,7 +1372,7 @@ function App() {
             {mobileMenuOpen ? <X size={20} /> : <MenuIcon size={20} />}
           </button>
         </div>
-        {mobileMenuOpen && <nav className="absolute left-4 right-4 top-full grid gap-4 rounded-2xl border border-forest/10 bg-white p-5 shadow-xl md:hidden"><a href="/menu" onClick={(event) => navigate(event, "/menu")}>Our menu</a><a href={sectionHref("track-order")} onClick={(event) => navigate(event, sectionHref("track-order"))}>Track order</a><a href="/about" onClick={(event) => navigate(event, "/about")}>Our story</a><a href={sectionHref("reserve")} onClick={(event) => navigate(event, sectionHref("reserve"))}>Find a table</a></nav>}
+        {mobileMenuOpen && <nav className="absolute left-4 right-4 top-full grid gap-4 rounded-2xl border border-forest/10 bg-white p-5 shadow-xl md:hidden"><a href="/menu" onClick={(event) => navigate(event, "/menu")}>Our menu</a><a href={sectionHref("track-order")} onClick={(event) => navigate(event, sectionHref("track-order"))}>Track order</a><a href="/about" onClick={(event) => navigate(event, "/about")}>Our story</a><a href="/reserve" onClick={(event) => navigate(event, "/reserve")}>Find a table</a></nav>}
       </header>
 
       <main>
@@ -1301,7 +1407,7 @@ function App() {
               <button type="button" className="staff-primary mt-6" onClick={() => { setAuthMode("login"); setAuthOpen(true); }}>Sign in</button>
               <p className="mt-5"><a href="/" onClick={(event) => navigate(event, "/")} className="text-sm font-semibold text-leaf underline underline-offset-4">Back to home</a></p>
             </section>
-          : isApplicationPage ? applicationPageContent : isMenuPage ? menuPageContent : isAboutPage ? aboutPageContent : <>
+          : isReservationPage ? reservationPageContent : isApplicationPage ? applicationPageContent : isMenuPage ? menuPageContent : isAboutPage ? aboutPageContent : <>
         <section className="landing-hero">
           <div className="landing-hero-copy">
             <span className="landing-eyebrow"><Sparkles size={14} /> AHODWO KITCHEN · GHANA ON A PLATE</span>
@@ -1309,7 +1415,7 @@ function App() {
             <p>From smoky banku to a bowl of red red, come hungry for the flavours that bring us together.</p>
             <div className="landing-hero-actions">
               <a href="/menu" onClick={(event) => navigate(event, "/menu")} className="landing-button">Explore the menu <ArrowRight size={16} /></a>
-              <a href="#reserve" onClick={(event) => navigate(event, "#reserve")} className="landing-text-link">Book a table <ArrowUpRight size={15} /></a>
+              <a href="/reserve" onClick={(event) => navigate(event, "/reserve")} className="landing-text-link">Book a table <ArrowUpRight size={15} /></a>
             </div>
             <div className="landing-trust"><span><i /> Freshly prepared</span><span><i /> Local favourites</span><span><i /> Open daily · 11 am–10 pm</span></div>
           </div>
@@ -1595,37 +1701,6 @@ function App() {
           </div>
         </section>
 
-        <section id="reserve" className="mx-auto max-w-7xl scroll-mt-8 px-5 py-20 md:px-10 md:py-28">
-          <div className="grid gap-12 md:grid-cols-[.85fr_1.15fr] md:items-start">
-            <div><span className="text-xs font-bold uppercase tracking-[.22em] text-leaf">Make it a date</span><h2 className="mt-3 font-display text-4xl font-semibold sm:text-5xl">Your table's<br /><span className="italic text-leaf">waiting.</span></h2><p className="mt-5 max-w-sm text-sm leading-7 text-forest/55">Gather your favourite people. Sign in to request a table and keep track of your reservation.</p></div>
-            {customerUser ? <form onSubmit={submitBooking} className="rounded-[1.5rem] bg-white p-6 shadow-sm sm:p-8">
-              <h3 className="font-display text-2xl font-semibold">Reserve a table</h3><p className="mt-1 text-xs text-forest/50">Check live availability for a 90-minute visit. Our team will confirm your request.</p>
-              <div className="mt-5 rounded-xl bg-[#e9eee4] p-3.5"><p className="text-xs font-semibold text-forest">{customerUser.name}</p><p className="mt-1 text-[11px] text-forest/55">{customerUser.email} · {customerUser.phone}</p><p className="mt-2 text-[10px] text-leaf">Signed in · reservation will be saved to your account</p></div>
-              <div className="mt-6 grid gap-4 sm:grid-cols-2">
-                <label className="field-label">Date<input required name="date" type="date" min={new Date().toISOString().slice(0, 10)} value={bookingSlot.date} onChange={(event) => setBookingSlot((current) => ({ ...current, date: event.target.value }))} /></label>
-                <label className="field-label">Time<select required name="time" value={bookingSlot.time} onChange={(event) => setBookingSlot((current) => ({ ...current, time: event.target.value }))}><option value="" disabled>Choose a time</option>{["11:00", "12:00", "13:00", "14:00", "17:00", "18:00", "19:00", "20:00", "20:30"].map((time) => <option key={time} value={time}>{new Date(`2000-01-01T${time}`).toLocaleTimeString("en-GH", { hour: "numeric", minute: "2-digit" })}</option>)}</select><ChevronDown size={14} className="pointer-events-none absolute bottom-4 right-4 text-forest/40" /></label>
-                <label className="field-label">Guests<select required name="partySize" value={bookingSlot.partySize} onChange={(event) => setBookingSlot((current) => ({ ...current, partySize: Number(event.target.value) }))}>{Array.from({ length: 20 }, (_, index) => index + 1).map((size) => <option key={size} value={size}>{size} {size === 1 ? "guest" : "guests"}</option>)}</select><ChevronDown size={14} className="pointer-events-none absolute bottom-4 right-4 text-forest/40" /></label>
-                <label className="field-label">Anything we should know?<textarea name="notes" rows="2" maxLength="500" placeholder="A special occasion, dietary needs..." /></label>
-              </div>
-              {availabilityLoading && <p className="mt-4 text-sm text-forest/55" role="status">Checking tables for that time…</p>}
-              {availabilityError && <p className="mt-4 rounded-xl bg-sky-50 p-3 text-sm text-sky-950" role="alert">{availabilityError}</p>}
-              {tableAvailability && <div className="mt-4 rounded-xl bg-[#e9eee4] p-3.5" aria-live="polite">
-                <p className="text-xs font-semibold text-forest">{tableAvailability.tables.length ? `${tableAvailability.tables.length} tables available` : "No tables available for this time"} · {tableAvailability.durationMinutes}-minute visit</p>
-                {tableAvailability.tables.length
-                  ? <p className="mt-1 text-[11px] text-forest/60">{tableAvailability.tables.map((table) => `${table.name} (${table.seats} seats)`).join(" · ")}. Our team assigns your table when confirming.</p>
-                  : <p className="mt-1 text-[11px] text-forest/60">Choose another time or date to see available tables.</p>}
-              </div>}
-              <button disabled={busy || availabilityLoading || !tableAvailability?.tables.length} className="mt-5 w-full rounded-full bg-forest px-5 py-3.5 text-sm font-semibold text-white transition hover:bg-leaf disabled:opacity-60">{busy ? "Sending request…" : "Request a table"}</button>
-              {bookingMessage && <p role="status" className="mt-4 rounded-xl bg-leaf/10 p-3 text-sm text-leaf">{bookingMessage}</p>}
-              {bookingNotifications && <div className="mt-2 rounded-xl bg-[#e9eee4] p-3 text-xs text-forest/70" role="status">
-                <p>Email: {bookingNotifications.email.message}</p>
-              </div>}
-              {customerReservations.length > 0 && <div className="mt-6 border-t border-forest/10 pt-5"><h4 className="font-display text-lg font-semibold">Your reservations</h4><div className="mt-3 grid gap-2">{customerReservations.map((reservation) => <div key={reservation.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-cream p-3"><div><p className="text-xs font-semibold">{reservation.date} · {reservation.time}</p><p className="mt-1 text-[10px] text-forest/50">{reservation.partySize} guests{reservation.tableName ? ` · ${reservation.tableName}` : ""}</p></div><span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-semibold capitalize text-amber-800">{reservation.status}</span></div>)}</div></div>}
-            </form>
-            : <div className="rounded-[1.5rem] bg-white p-7 shadow-sm sm:p-9"><span className="grid h-12 w-12 place-items-center rounded-full bg-lime/40 text-leaf"><CircleUserRound size={22} /></span><h3 className="mt-4 font-display text-2xl font-semibold">Sign in to reserve</h3><p className="mt-2 max-w-sm text-sm leading-6 text-forest/55">Create a guest account or sign in first. Your reservation will be linked to your account so you can find it again.</p><button onClick={() => { setAuthMode("login"); setAuthOpen(true); }} className="mt-5 min-h-11 w-full rounded-full bg-forest px-5 py-3 text-sm font-semibold text-white transition hover:bg-leaf">Sign in to continue</button><p className="mt-3 text-center text-xs text-forest/50">New here? <button onClick={() => { setAuthMode("register"); setAuthOpen(true); }} className="font-semibold text-leaf underline underline-offset-4">Create an account</button></p></div>}
-          </div>
-        </section>
-
         <section className="takeaway-promo" aria-labelledby="takeaway-promo-heading">
           <div className="takeaway-promo-card">
             <div className="takeaway-promo-copy">
@@ -1668,7 +1743,7 @@ function App() {
               </section>
               <section className="restaurant-footer-contact" aria-labelledby="restaurant-contact-heading">
                 <span className="restaurant-footer-label" id="restaurant-contact-heading">MAKE IT A DATE</span>
-                <a href={sectionHref("reserve")} onClick={(event) => navigate(event, sectionHref("reserve"))}>Reserve a table <ArrowRight size={15} /></a>
+                <a href="/reserve" onClick={(event) => navigate(event, "/reserve")}>Reserve a table <ArrowRight size={15} /></a>
                 <a href="/menu" onClick={(event) => navigate(event, "/menu")}>Order something lovely <ArrowRight size={15} /></a>
               </section>
             </div>

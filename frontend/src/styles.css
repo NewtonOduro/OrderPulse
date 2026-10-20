@@ -3302,7 +3302,7 @@ a {
     color: #fff7ed;
   }
 
-  .landing-header .landing-action > span {
+  .landing-header .landing-action > span:not(.account-avatar) {
     display: none;
   }
 
