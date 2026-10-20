@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { LogOut } from "lucide-react";
 import { displayOrderNumber } from "./order-number.js";
 
 function formatDate(value) {
@@ -27,12 +28,28 @@ export default function CustomerProfile({
   customerFavorites,
   customerFeedback,
   onBack,
+  onSignOut,
   onDeleted,
 }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [password, setPassword] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [signOutError, setSignOutError] = useState("");
+  const [signingOut, setSigningOut] = useState(false);
+
+  async function signOut() {
+    setSignOutError("");
+    setSigningOut(true);
+    try {
+      const result = await onSignOut();
+      if (!result.ok) setSignOutError(result.error);
+    } catch (error) {
+      setSignOutError(error.message || "We couldn't sign you out. Please try again.");
+    } finally {
+      setSigningOut(false);
+    }
+  }
 
   async function deleteAccount(event) {
     event.preventDefault();
@@ -62,8 +79,22 @@ export default function CustomerProfile({
         Back to home
       </a>
       <div className="rounded-3xl bg-[#e9eee4] p-5 sm:p-7">
-        <span className="text-xs font-bold uppercase tracking-[.2em] text-leaf">Your account</span>
-        <h2 id="customer-profile-heading" className="mt-2 font-display text-3xl font-semibold">My profile<span>.</span></h2>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <span className="text-xs font-bold uppercase tracking-[.2em] text-leaf">Your account</span>
+            <h2 id="customer-profile-heading" className="mt-2 font-display text-3xl font-semibold">My profile<span>.</span></h2>
+          </div>
+          <button
+            type="button"
+            onClick={signOut}
+            disabled={signingOut}
+            className="inline-flex min-h-10 items-center gap-2 rounded-full border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-wait disabled:opacity-60"
+          >
+            <LogOut size={16} />
+            {signingOut ? "Signing out…" : "Sign out"}
+          </button>
+        </div>
+        {signOutError && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-800">{signOutError}</p>}
         <dl className="mt-5 grid gap-4 sm:grid-cols-3">
           <div><dt className="text-xs font-semibold uppercase tracking-wide text-forest/50">Name</dt><dd className="mt-1 font-semibold">{customerUser.name}</dd></div>
           <div><dt className="text-xs font-semibold uppercase tracking-wide text-forest/50">Email</dt><dd className="mt-1 break-all font-semibold">{customerUser.email}</dd></div>

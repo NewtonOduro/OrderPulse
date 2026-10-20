@@ -998,8 +998,10 @@ function App() {
       setCustomerFavorites([]);
       setCustomerOrders([]);
       setCustomerFeedback([]);
+      return { ok: true };
     } catch (error) {
       setBookingMessage(error.message);
+      return { ok: false, error: error.message };
     }
   }
 
@@ -1386,6 +1388,7 @@ function App() {
               customerFavorites={customerFavorites}
               customerFeedback={customerFeedback}
               onBack={(event) => navigate(event, "/")}
+              onSignOut={signOutCustomer}
               onDeleted={() => {
                 setCustomerUser(null);
                 setCustomerReservations([]);
